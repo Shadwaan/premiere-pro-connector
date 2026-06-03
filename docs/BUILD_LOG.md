@@ -8,6 +8,36 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-007` (fix) · sequence dropped on import — missing `<masterclipid>`
+
+**Symptom.** Premiere Pro 2026 imported the MEDIA (files landed in the bin) but the
+sequence/timeline never appeared; re-import threw "File Import Failure" with an empty
+message.
+
+**Diagnosis (data, not guesses).** Ran all five suspect checks against
+`koshtoset_autocut.xml` — **all passed**: in/out ≤ file `<duration>` (0/697 violations),
+rate uniform `(30, TRUE)`, file ids define-once with no dangling refs, video track gapless
+with no overlaps, audio block in/out valid. Then diffed our video `<clipitem>` against the
+Premiere-authored clips in `koshtoset.xml`. Our video clips were **missing**
+`masterclipid, pproTicksIn, pproTicksOut, alphatype, pixelaspectratio, anamorphic`. The
+**re-emitted audio clip (verbatim) HAD `masterclipid`; our generated video clips did not.**
+That asymmetry is the bug: without `<masterclipid>` Premiere can import the file (so media
+reaches the bin) but cannot instantiate the clip in the sequence → the whole sequence is
+dropped with an empty error.
+
+**Fix (`engine/export/fcp7xml.py`, sourced path).** Emit on every video clipitem, in
+Premiere's field order: `<masterclipid>` = `masterclip-<file_id>` (one master clip per
+source file — all instances of a file share it), `<pproTicksIn/Out>` (=
+`frame × 254_016_000_000 / fps`, verified byte-exact vs the source: in 1034 →
+8763839884800), and `<alphatype>/<pixelaspectratio>/<anamorphic>`. No CONTRACTS change.
+
+**Verified.** Regression test `test_clipitems_have_masterclipid_and_ppro_ticks` added;
+**94 offline tests pass.** Re-exported `koshtoset_autocut.xml`: 697 video clipitems, **0
+missing masterclipid / pproTicks**, 4 master clips (file-1..4), audio masterclip-5 intact,
+well-formed, duration 51731. Awaiting the user's re-import to confirm the sequence loads.
+
+---
+
 ## 2026-06-03 · `PPC-007` · CLI + FCP7 XML round-trip on the real Koshto set
 
 **Changed**

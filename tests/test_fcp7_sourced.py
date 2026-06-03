@@ -111,6 +111,29 @@ def test_master_audio_reemitted_and_well_formed():
     assert root.findtext("sequence/duration") == "200"  # 20 s * 10 fps
 
 
+def test_clipitems_have_masterclipid_and_ppro_ticks():
+    """Regression: video clipitems must carry masterclipid (+ ppro ticks / standard fields),
+    or Premiere imports the media but drops the sequence."""
+    imp = _imported()
+    xml, _ = edit_decision_list_to_fcp7xml_sourced(
+        _edl(), imp, {"A": imp.angles[0]}, duration_s=20.0
+    )
+    root = ET.fromstring(xml)
+    clips = root.findall("sequence/media/video/track/clipitem")
+    assert clips
+    for c in clips:
+        fid = c.find("file").get("id")
+        assert c.findtext("masterclipid") == f"masterclip-{fid}"  # one master clip per file
+        assert c.find("pproTicksIn") is not None
+        assert c.find("pproTicksOut") is not None
+        assert c.findtext("alphatype") == "none"
+        assert c.findtext("anamorphic") == "FALSE"
+    # ppro ticks are exact: frame * 254_016_000_000 / fps (fps=10 here).
+    c0 = clips[0]  # file-1, src in=60 out=110
+    assert c0.findtext("pproTicksIn") == str(round(60 * 254_016_000_000 / 10))
+    assert c0.findtext("pproTicksOut") == str(round(110 * 254_016_000_000 / 10))
+
+
 def test_markers_emitted_from_energy():
     imp = _imported()
     xml, _ = edit_decision_list_to_fcp7xml_sourced(

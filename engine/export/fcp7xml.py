@@ -29,6 +29,13 @@ XMEML_VERSION = "4"  # the version Premiere itself reads/writes
 # Fractional NTSC rates -> their integer FCP7 timebase (ntsc flag = TRUE).
 _NTSC_BASES = (24, 30, 50, 60)
 
+# Premiere's internal time unit: 254,016,000,000 ticks per second (fps-independent).
+_PPRO_TICKS_PER_SECOND = 254_016_000_000
+
+
+def _ppro_ticks(frame: int, fps: float) -> int:
+    return round(frame * _PPRO_TICKS_PER_SECOND / fps)
+
 
 def timebase_ntsc(fps: float) -> tuple[int, bool]:
     """Map fps to FCP7 ``(timebase, ntsc)``. e.g. 29.97 -> (30, True); 30 -> (30, False)."""
@@ -244,6 +251,10 @@ def edit_decision_list_to_fcp7xml_sourced(
             clip_n += 1
             seg = rc.segment
             clip = ET.SubElement(track, "clipitem", id=f"clipitem-{clip_n}")
+            # masterclipid links every instance of a source file to ONE bin master clip.
+            # Without it Premiere imports the media but silently drops the sequence (the
+            # bug that made the timeline fail to appear). One master clip per source file.
+            ET.SubElement(clip, "masterclipid").text = f"masterclip-{seg.file_id}"
             ET.SubElement(clip, "name").text = seg.file_name
             ET.SubElement(clip, "enabled").text = "TRUE"
             file_dur = _file_duration_frames(seg.file_xml) or rc.src_out_f
@@ -253,6 +264,12 @@ def edit_decision_list_to_fcp7xml_sourced(
             ET.SubElement(clip, "end").text = str(rc.tl_end_f)
             ET.SubElement(clip, "in").text = str(rc.src_in_f)
             ET.SubElement(clip, "out").text = str(rc.src_out_f)
+            # Premiere's native tick timing + the standard clip metadata it writes itself.
+            ET.SubElement(clip, "pproTicksIn").text = str(_ppro_ticks(rc.src_in_f, fps))
+            ET.SubElement(clip, "pproTicksOut").text = str(_ppro_ticks(rc.src_out_f, fps))
+            ET.SubElement(clip, "alphatype").text = "none"
+            ET.SubElement(clip, "pixelaspectratio").text = "square"
+            ET.SubElement(clip, "anamorphic").text = "FALSE"
             if seg.file_id not in emitted_files:
                 clip.append(ET.fromstring(seg.file_xml))  # define-once, verbatim metadata
                 emitted_files.add(seg.file_id)
