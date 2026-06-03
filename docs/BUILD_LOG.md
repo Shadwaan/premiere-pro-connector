@@ -8,6 +8,50 @@ still open.
 
 ---
 
+## 2026-06-04 · `PPC-007` (fusion fix) · switches land on downbeats, not late beats
+
+**Symptom.** Angle switches felt 1–2 beats late — landing on beat 2/3 of the bar instead of
+the "1".
+
+**Diagnosis (data, on the koshtonewset run).**
+1. madmom DOES give downbeats (703 downbeats / 2809 beats), but fusion wasn't using them:
+   `EditParams.snap` defaulted to `"beat"`, so `_grid` returned the plain beat grid. All 248
+   switches landed exactly on a beat (mean |dt nearest beat| = 0.000 s) but only **23.4 % on
+   a downbeat**; the rest on beat #2 (+0.49 s) or beat #3 (+0.94 s). Mean |dt downbeat| 0.652 s.
+2. The +5-frame / 0.167 s master offset is correct-signed and applied once (`_shift_analysis`);
+   switches sat dead-on beats, so it wasn't the cause.
+3. The walk used `_first_ge` (round FORWARD to next grid point) → consistently late.
+
+**Fix (fusion only; no CONTRACTS/shape change).**
+- New `switch_quant` param on `fuse`/`propose_cuts` (`"downbeat"` default, also `"beat"` /
+  `"phrase"`), selecting the cut/switch grid — backward-compatible. `propose_cuts` derives it
+  from the resolved `params.snap` when not passed.
+- `map_brief_to_params` baseline `snap` flipped to `"downbeat"` (brief-layer default; the
+  `EditParams` contract default stays `"beat"`, so CONTRACTS.md is untouched).
+- New `_nearest_grid` snaps the shot end to the NEAREST grid point (≥ min-shot, forward of
+  last), replacing the forward `_first_ge` bias.
+- `phrase` mode = every `phrase_downbeats` downbeats (default 2 = every 2 bars / 8 beats) for
+  an optional coarser switch cadence.
+
+**Before / after (cached analysis, koshtonewset):**
+| | switches | mean &#124;dt downbeat&#124; | on-downbeat |
+|---|---|---|---|
+| BEFORE (beat grid, forward) | 254 | 0.762 s | 16.5 % |
+| AFTER (downbeat, nearest — default) | 242 | **0.000 s** | **100 %** |
+
+**Re-exported `koshtonewset_autocut.xml`** (snap=downbeat): 630 decisions, 242 switches.
+Output audit: **242/242 switches on a downbeat (max offset 0 frames)**; the one non-downbeat
+clip start is the GoPro file-boundary split at 45316 (same-angle, exempt). FIX 1/FIX 2 still
+hold (2 tracks, 244 clipitems, 0 missing masterclipid/ppro, union gapless [0, 51731]).
+
+**Tests:** `test_switches_land_on_downbeats_by_default`, `test_beat_quant_can_land_off_downbeats`,
+`test_switch_quant_phrase_uses_coarser_grid`. **101 offline tests pass.**
+
+### Next up
+- `PPC-008`: golden-clip eval (cut-on-beat accuracy + keep-rate) — last Phase-0 task.
+
+---
+
 ## 2026-06-04 · `PPC-007` (export polish) · coalesce cuts, per-angle tracks, filter audit
 
 Two export-only fixes (no CONTRACTS/fusion change) + a grade/framing-preservation audit on a

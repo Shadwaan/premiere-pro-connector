@@ -245,6 +245,47 @@ def test_brief_face_and_snap():
     assert p.snap == "downbeat"
 
 
+def _alternating_interest(a, t):
+    hot = int(t // 2) % 2 == 0  # swap hot angle every 2 s (= one bar at bar=2.0)
+    return 0.6 if (a == "A") == hot else 0.4
+
+
+def test_switches_land_on_downbeats_by_default():
+    """Regression for the 'switches 1-2 beats late' bug: by default every angle switch must
+    land on a downbeat (the bar's '1'), not an arbitrary beat."""
+    project, bg, energy = make_project(40.0), make_beatgrid(40.0, bar=2.0), make_energy(40.0)
+    scores = make_scores(("A", "B"), 40.0, _alternating_interest)
+    edl = fuse(project, bg, energy, [], scores, EditParams(cut_density=1.0))  # default downbeat
+    d = edl.decisions
+    switches = [d[i].t_start for i in range(1, len(d)) if d[i].angle_id != d[i - 1].angle_id]
+    assert switches
+    for t in switches:
+        assert min(abs(t - db) for db in bg.downbeats) < 1e-6, f"switch {t} not on a downbeat"
+
+
+def test_beat_quant_can_land_off_downbeats():
+    """Sanity contrast: with switch_quant='beat' the grid is finer, so cut boundaries may
+    fall on non-downbeat beats (proves the default really is the downbeat grid)."""
+    project, bg, energy = make_project(40.0), make_beatgrid(40.0, bar=2.0), make_energy(40.0)
+    scores = make_scores(("A", "B"), 40.0, _alternating_interest)
+    edl = fuse(project, bg, energy, [], scores, EditParams(cut_density=1.0, min_shot_len_s=0.5),
+               switch_quant="beat")
+    bounds = [x.t_start for x in edl.decisions[1:]]
+    assert any(min(abs(t - db) for db in bg.downbeats) > 1e-6 for t in bounds)
+
+
+def test_switch_quant_phrase_uses_coarser_grid():
+    """phrase mode (every `phrase_downbeats` downbeats) puts all cuts on the phrase grid."""
+    project, bg, energy = make_project(40.0), make_beatgrid(40.0, bar=2.0), make_energy(40.0)
+    scores = make_scores(("A", "B"), 40.0, _alternating_interest)
+    edl = fuse(project, bg, energy, [], scores, EditParams(cut_density=1.0),
+               switch_quant="phrase", phrase_downbeats=2)
+    phrase_pts = bg.downbeats[::2]  # every 2 bars
+    for x in edl.decisions[1:]:  # interior boundaries
+        if x.t_start < edl.decisions[-1].t_end - 1e-6:
+            assert min(abs(x.t_start - p) for p in phrase_pts) < 1e-6
+
+
 def test_availability_forces_only_available_angle():
     """When an angle has no footage in a window, fusion must not choose it there."""
     project, bg, energy = make_project(duration=20.0), make_beatgrid(20.0), make_energy(20.0)

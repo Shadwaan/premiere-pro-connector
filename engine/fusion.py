@@ -63,6 +63,27 @@ def _first_ge(sorted_arr: np.ndarray, x: float) -> float:
     return float(sorted_arr[i]) if i < sorted_arr.size else float("inf")
 
 
+def _nearest_grid(grid: np.ndarray, desired: float, lo_bound: float, last: float) -> float:
+    """Grid point NEAREST to ``desired`` that is >= ``lo_bound`` and strictly after ``last``.
+
+    Snapping to the nearest (vs always rounding forward) removes the systematic "late"
+    bias — a switch lands on the closest downbeat to its musical target, not the next one.
+    Falls back to the first grid point >= lo_bound if neither neighbour qualifies.
+    """
+    if grid.size == 0:
+        return float("inf")
+    i = int(np.searchsorted(grid, desired))
+    cands = []
+    if i < grid.size:
+        cands.append(float(grid[i]))  # ceil
+    if i > 0:
+        cands.append(float(grid[i - 1]))  # floor
+    cands = [g for g in cands if g >= lo_bound - _EPS and g > last + _EPS]
+    if cands:
+        return min(cands, key=lambda g: abs(g - desired))
+    return _first_ge(grid, lo_bound)
+
+
 def _snap_to_grid(x: float, grid: np.ndarray) -> float:
     if grid.size == 0:
         return x
@@ -129,10 +150,11 @@ def _candidate_cuts(
     energy: EnergyTimeline,
     params: EditParams,
     phrase_downbeats: int,
+    switch_quant: str,
     availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> list[float]:
     duration = float(project.duration_s)
-    grid = _grid(beat_grid, params.snap, phrase_downbeats)
+    grid = _grid(beat_grid, switch_quant, phrase_downbeats)
     grid = grid[(grid > _EPS) & (grid < duration - _EPS)]
     if grid.size == 0:  # no beat grid available — fall back to a uniform 2 s grid
         grid = np.arange(2.0, duration, 2.0)
@@ -157,7 +179,7 @@ def _candidate_cuts(
     last = 0.0
     while last < duration - _EPS:
         L = _target_shot_len(last, energy.sections, e_times, e_vals, energy.drops, params)
-        ng = _first_ge(grid, last + L)
+        ng = _nearest_grid(grid, last + L, last + params.min_shot_len_s, last)
         nf = _first_ge(forced_arr, last + _EPS) if forced_arr.size else float("inf")
         nxt = min(ng, nf, duration)
         if nxt - last < params.min_shot_len_s:  # never below the floor
@@ -327,16 +349,22 @@ def fuse(
     angle_scores,
     params: EditParams,
     *,
-    phrase_downbeats: int = 4,
+    phrase_downbeats: int = 2,
+    switch_quant: str = "downbeat",
     availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> EditDecisionList:
     """Core fusion: signals + params -> validated ``EditDecisionList``.
 
-    ``availability`` (optional) maps angle_id -> available [start, end] intervals (seconds);
-    an angle is only chosen where it has footage. Availability edges also become forced cut
-    points so no segment straddles an angle appearing/disappearing.
+    ``switch_quant`` is the grid that cuts/angle-switches quantize to: ``"downbeat"``
+    (default — switches land on the bar's "1"), ``"beat"`` (finer), or ``"phrase"`` (every
+    ``phrase_downbeats`` downbeats, e.g. 2 = every 2 bars / 8 beats). Snapping is to the
+    NEAREST grid point, not forward. ``availability`` (optional) maps angle_id -> available
+    [start, end] intervals; an angle is only chosen where it has footage, and availability
+    edges become forced cut points.
     """
-    cuts = _candidate_cuts(project, beat_grid, energy, params, phrase_downbeats, availability)
+    cuts = _candidate_cuts(
+        project, beat_grid, energy, params, phrase_downbeats, switch_quant, availability
+    )
     decisions = _assign_angles(
         cuts, project, words, angle_scores, energy.sections, params, availability
     )
@@ -354,14 +382,20 @@ def propose_cuts(
     *,
     params: EditParams | None = None,
     brief: str | None = None,
-    phrase_downbeats: int = 4,
+    phrase_downbeats: int = 2,
+    switch_quant: str | None = None,
     availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> EditDecisionList:
-    """Fusion entrypoint accepting either explicit ``params`` or a natural-language ``brief``."""
+    """Fusion entrypoint accepting either explicit ``params`` or a natural-language ``brief``.
+
+    ``switch_quant`` defaults to the resolved ``params.snap`` (which the brief sets, baseline
+    ``"downbeat"``), so switches land on the bar by default; pass it explicitly to override.
+    """
     p = params if params is not None else map_brief_to_params(brief)
+    sq = switch_quant if switch_quant is not None else p.snap
     return fuse(
         project, beat_grid, energy, words, angle_scores, p,
-        phrase_downbeats=phrase_downbeats, availability=availability,
+        phrase_downbeats=phrase_downbeats, switch_quant=sq, availability=availability,
     )
 
 
@@ -379,6 +413,10 @@ _FACE = ("face", "vocal", "hook", "lyric", "sing", "talk", "camera", "lip")
 def map_brief_to_params(brief: str | None, base: EditParams | None = None) -> EditParams:
     """Map a natural-language brief onto ``EditParams`` with a small keyword rules layer."""
     p = (base or EditParams()).model_copy(deep=True)
+    if base is None:
+        # Brief-layer default: quantize switches to the bar's "1" (the EditParams contract
+        # default stays "beat"; we don't change CONTRACTS.md). PPC-007 downbeat fix.
+        p.snap = "downbeat"
     if not brief:
         return p
     b = brief.lower()
