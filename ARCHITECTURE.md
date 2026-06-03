@@ -41,8 +41,15 @@ Sub-modules:
 - `transcription` — adapter that calls the hosted transcriber and maps its segments into
   timestamped speech/lyric cues.
 - `fusion` — deterministic decision logic that combines the three timelines + NL parameters
-  into an `EditDecisionList`.
-- `export` — `EditDecisionList` → FCPXML (primary) / EDL (fallback).
+  into an `EditDecisionList`. Accepts optional **angle-availability** windows so an angle is
+  never chosen where it has no footage.
+- `fcp7_import` + `timeline_model` — read the user's synced **FCP7 XML** into an internal
+  multi-file-angle timeline (see §3). *Not* contract types: they map `angle_id` + a timeline
+  range back to the correct underlying file + source frame; the engine still works on the
+  contract `Angle`/`EditDecisionList`.
+- `export` — `EditDecisionList` → **FCP7 XML** (`<xmeml>`, primary — Premiere 2026 does not
+  import `.fcpxml`) / FCPXML (secondary) / EDL (fallback). Frame-snapping happens only here.
+- `cli` — Phase-0 entrypoint: FCP7 XML in → analyze → fakes → fusion → FCP7 XML out.
 
 ### 2.2 Provider adapters (`engine/providers/`) — new, pattern borrowed from multimodal-transcriber
 `clip` and the transcriber live on **Modal**. They are reached over HTTP behind a swappable
@@ -83,6 +90,30 @@ pre-syncs the angles, every angle shares this clock — that is what makes fusio
 this invariant everywhere (same rule the multimodal-transcriber repo uses).
 
 Frame-snapping to the project FPS happens **only** at export time, never inside the engine.
+
+### 3.1 Multi-file angles, availability, and the FCP7 XML round-trip (added PPC-007)
+
+Real synced footage is messier than "one file per angle":
+
+- **An angle is a TRACK, not a file.** In the first real set each camera is split across
+  multiple media files (GoPro = `GX010465` + `GX020465`; DSLR = `MVI_4017` + `MVI_4018`).
+  `timeline_model.AngleTrack` models an angle as an ordered list of source-file segments,
+  each with its own timeline range and **source in-point** (the sync trim). When fusion picks
+  an angle for a cut, the exporter `resolve()`s that timeline range against the track,
+  **splitting at file boundaries** so a cut that crosses `GX010465`→`GX020465` becomes two
+  `clipitem`s with correct source frames. Per-clip **filters are preserved** (e.g. the DSLR
+  aspect Distort).
+- **Availability windows.** A track need not cover the whole timeline (the DSLR ends at
+  ~24:30 while the GoPro and music continue). `AngleTrack.availability_s()` yields the covered
+  intervals; fusion takes these as an optional input, forces cuts at the edges, and never
+  selects an angle outside its windows (so the DSLR-less tail is solo GoPro).
+- **Sync offset.** The master-audio clip may sit at a small timeline offset (here +5 frames).
+  The CLI shifts the wav-relative analysis onto the sequence timeline so cuts land where the
+  music actually is.
+- **Round-trip surface = FCP7 XML.** Input and output are both `<xmeml>` (Premiere-native).
+  These richer shapes live in `timeline_model` / `fcp7_import`, *outside* `CONTRACTS.md` — the
+  contract `EditDecisionList` (angle_id per cut) remains the one handoff between fusion and
+  export; the source map only resolves angle_id → file/frame at export.
 
 ---
 
@@ -157,11 +188,13 @@ premiere-pro-connector/
     contracts.py          # Pydantic models (CONTRACTS.md is law)
     audio_timing/         # madmom/librosa — NEW
     providers/            # clip + transcriber adapters (Modal) + fakes
+    timeline_model.py     # multi-file angle + availability model (NOT a contract) — PPC-007
+    fcp7_import.py        # parse synced FCP7 XML -> ImportedSequence — PPC-007
     angle_scoring.py
     transcription.py
-    fusion.py
-    export/               # fcpxml.py, edl.py
-    cli.py                # Phase 0 entrypoint
+    fusion.py             # + optional angle-availability
+    export/               # fcp7xml.py (primary), fcpxml.py (secondary), edl.py (fallback)
+    cli.py                # Phase 0 entrypoint (FCP7 XML in -> FCP7 XML out)
   mcp/                    # Phase 1 MCP server
   uxp/                    # Phase 2 Premiere UXP panel
   tests/                  # unit + a golden-clip eval

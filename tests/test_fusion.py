@@ -245,6 +245,24 @@ def test_brief_face_and_snap():
     assert p.snap == "downbeat"
 
 
+def test_availability_forces_only_available_angle():
+    """When an angle has no footage in a window, fusion must not choose it there."""
+    project, bg, energy = make_project(duration=20.0), make_beatgrid(20.0), make_energy(20.0)
+    # B is the higher-interest angle everywhere, but only available for the first 10 s.
+    scores = make_scores(("A", "B"), 20.0, lambda a, t: 0.9 if a == "B" else 0.4)
+    availability = {"A": [(0.0, 20.0)], "B": [(0.0, 10.0)]}
+    edl = fuse(
+        project, bg, energy, [], scores,
+        EditParams(switch_penalty=0.0, cut_density=1.0), availability=availability,
+    )
+    after = [d for d in edl.decisions if d.t_start >= 10.0 - 1e-6]
+    before = [d for d in edl.decisions if d.t_end <= 10.0 + 1e-6]
+    assert after and all(d.angle_id == "A" for d in after)  # only A after B disappears
+    assert any(d.angle_id == "B" for d in before)  # B used while available
+    # A forced cut lands on the availability edge so no segment straddles it.
+    assert any(abs(d.t_start - 10.0) < 0.5 for d in edl.decisions)
+
+
 def test_brief_changes_cut_count_end_to_end():
     project = make_project(duration=60.0)
     bg = make_beatgrid(duration=60.0, bar=1.0)

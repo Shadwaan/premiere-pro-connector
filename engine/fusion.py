@@ -129,6 +129,7 @@ def _candidate_cuts(
     energy: EnergyTimeline,
     params: EditParams,
     phrase_downbeats: int,
+    availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> list[float]:
     duration = float(project.duration_s)
     grid = _grid(beat_grid, params.snap, phrase_downbeats)
@@ -136,14 +137,16 @@ def _candidate_cuts(
     if grid.size == 0:  # no beat grid available — fall back to a uniform 2 s grid
         grid = np.arange(2.0, duration, 2.0)
 
-    # Section boundaries (interior) are forced cuts, snapped onto the grid so cuts stay on
-    # the beat. Section transitions are the musically important structural cuts.
+    # Forced cuts (snapped onto the grid so cuts stay on the beat):
+    #  - section boundaries — the musically important structural transitions;
+    #  - angle availability edges — so no segment straddles an angle appearing/disappearing
+    #    (e.g. the DSLR ending at 24:30), which would make angle choice ambiguous.
+    boundaries = {s.start for s in energy.sections}
+    for intervals in (availability or {}).values():
+        for a, b in intervals:
+            boundaries.update((a, b))
     forced = sorted(
-        {
-            _snap_to_grid(s.start, grid)
-            for s in energy.sections
-            if _EPS < s.start < duration - _EPS
-        }
+        {_snap_to_grid(t, grid) for t in boundaries if _EPS < t < duration - _EPS}
     )
     forced_arr = np.array(forced, dtype=float)
 
@@ -192,6 +195,13 @@ def _vocal_cue_in(words: list[WordCue], t0: float, t1: float) -> WordCue | None:
     return None
 
 
+def _available(intervals: list[tuple[float, float]] | None, t0: float, t1: float) -> bool:
+    """True if some availability interval fully covers [t0, t1] (None = always available)."""
+    if intervals is None:
+        return True
+    return any(a - _EPS <= t0 and t1 <= b + _EPS for a, b in intervals)
+
+
 def _assign_angles(
     cuts: list[float],
     project: Project,
@@ -199,11 +209,13 @@ def _assign_angles(
     angle_scores,
     sections: list[Section],
     params: EditParams,
+    availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> list[EditDecision]:
     score_map = {tl.angle_id: tl for tl in angle_scores}
     angle_ids = [a.angle_id for a in project.angles if a.angle_id in score_map]
     if not angle_ids:
         raise ValueError("no angle has a score timeline; cannot assign angles")
+    avail = availability or {}
 
     arr: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     for aid in angle_ids:
@@ -234,11 +246,18 @@ def _assign_angles(
                 s += params.switch_penalty  # hysteresis: reward staying
             eff[a] = s
 
-        allowed = angle_ids
+        # Availability gate first: only angles with footage across this whole segment.
+        available = [a for a in angle_ids if _available(avail.get(a), t0, t1)]
+        if not available:
+            available = list(angle_ids)  # safety: should not happen (one angle covers all)
+
+        allowed = available
         forced_switch = False
-        if prev is not None and len(angle_ids) > 1 and (held + seg_len) > params.max_consecutive_s:
-            allowed = [a for a in angle_ids if a != prev]  # staleness cap: force a switch
-            forced_switch = True
+        if prev is not None and len(available) > 1 and (held + seg_len) > params.max_consecutive_s:
+            others = [a for a in available if a != prev]  # staleness cap: force a switch
+            if others:
+                allowed = others
+                forced_switch = True
 
         # Deterministic argmax (tie-break by angle id).
         choice = max(allowed, key=lambda a: (eff[a], a))
@@ -309,10 +328,18 @@ def fuse(
     params: EditParams,
     *,
     phrase_downbeats: int = 4,
+    availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> EditDecisionList:
-    """Core fusion: signals + params -> validated ``EditDecisionList``."""
-    cuts = _candidate_cuts(project, beat_grid, energy, params, phrase_downbeats)
-    decisions = _assign_angles(cuts, project, words, angle_scores, energy.sections, params)
+    """Core fusion: signals + params -> validated ``EditDecisionList``.
+
+    ``availability`` (optional) maps angle_id -> available [start, end] intervals (seconds);
+    an angle is only chosen where it has footage. Availability edges also become forced cut
+    points so no segment straddles an angle appearing/disappearing.
+    """
+    cuts = _candidate_cuts(project, beat_grid, energy, params, phrase_downbeats, availability)
+    decisions = _assign_angles(
+        cuts, project, words, angle_scores, energy.sections, params, availability
+    )
     edl = EditDecisionList(project_id=project.project_id, params=params, decisions=decisions)
     _validate(edl, project)
     return edl
@@ -328,10 +355,14 @@ def propose_cuts(
     params: EditParams | None = None,
     brief: str | None = None,
     phrase_downbeats: int = 4,
+    availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> EditDecisionList:
     """Fusion entrypoint accepting either explicit ``params`` or a natural-language ``brief``."""
     p = params if params is not None else map_brief_to_params(brief)
-    return fuse(project, beat_grid, energy, words, angle_scores, p, phrase_downbeats=phrase_downbeats)
+    return fuse(
+        project, beat_grid, energy, words, angle_scores, p,
+        phrase_downbeats=phrase_downbeats, availability=availability,
+    )
 
 
 # --------------------------------------------------------------------------- #

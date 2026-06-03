@@ -8,6 +8,49 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-007` · CLI + FCP7 XML round-trip on the real Koshto set
+
+**Changed**
+- `engine/timeline_model.py` (NEW, dataclasses — *not* contracts): `SourceSegment` /
+  `AngleTrack` / `ResolvedClip` / `AudioRef` / `ImportedSequence`. Models a real **angle as a
+  track of multiple source files**, each with its own source in-point + filters; `resolve()`
+  splits a timeline range at file boundaries; `availability_s()` gives covered intervals.
+- `engine/fcp7_import.py` (NEW): parse a synced FCP7 `<xmeml>` → `ImportedSequence`
+  (fps/duration, multi-file video angles, audio block verbatim, master-audio picker).
+- `engine/fusion.py`: optional `availability` arg — forces cuts at availability edges and
+  never picks an angle outside its windows (backward-compatible; default None).
+- `engine/export/fcp7xml.py`: `edit_decision_list_to_fcp7xml_sourced(...)` — resolves each
+  cut to the correct file + source frames, splits multi-file angles, preserves the DSLR
+  Distort filter (verbatim `<filter>`), re-emits the master audio block verbatim, frame-snaps.
+- `engine/cli.py` (NEW): full Phase-0 pipeline + a `_shift_analysis` that moves the
+  wav-relative beats/energy onto the sequence timeline (the master clip's +5-frame offset).
+- Tests: `test_timeline_model.py` (6), `test_fcp7_import.py` (3, +real-guarded),
+  `test_fcp7_sourced.py` (4), fusion availability (1). **93 offline tests pass.**
+
+**Docs:** ARCHITECTURE §2.1/§3.1/§8 + PRD §4.6/§9 Q4 updated for the FCP7-XML round-trip,
+multi-file angle model, and availability windows. CONTRACTS.md untouched — the multi-file
+model is engine-internal; the contract `EditDecisionList` (angle_id per cut) is still the only
+fusion↔export handoff; the source map only resolves angle_id → file/frame at export.
+
+**Real run — `koshtoset.xml` → `koshtoset_autocut.xml`** (brief "fast cuts on the drop, hold
+on the hook", ~5 min madmom on the 28-min master):
+- fps 29.97; edit span 0:00 → **28:46** (music end); offset 0.167 s; 56 sections, 10 drops.
+- **695 decisions, 248 switches**; GoPro 395 / DSLR 300; shot length 1.62–6.40 s (mean 2.48).
+- Output verified: well-formed, **697 clipitems** (2 extra = multi-file splits), gapless,
+  covers [0, 51731]. **0 DSLR clips after 24:30** (availability honored — solo GoPro tail);
+  GoPro `GX010465`→`GX020465` handoff exactly at frame 45316 with source-in reset; **301/301
+  DSLR clips keep the Distort filter, 0 GoPro filters**; audio re-emitted; 66 markers;
+  source frames preserved (e.g. MVI_4018 start 43049 → in 21596). **n_unresolved = 0.**
+
+**Gate (PPC-007: "one command → FCPXML on the first real shoot")** — met as **one command →
+FCP7 XML** on the real set. **Import into Premiere Pro 2026 is the user's validation step.**
+
+### Next up
+- `PPC-008`: golden-clip eval (cut-on-beat accuracy + keep-rate). **Pausing for the user's
+  import of `koshtoset_autocut.xml`.**
+
+---
+
 ## 2026-06-03 · `PPC-006` (pivot) · FCP7 XML exporter — Premiere rejected .fcpxml
 
 **Why the pivot.** User tested the FCPXML import: **Premiere Pro 2026 does not recognize

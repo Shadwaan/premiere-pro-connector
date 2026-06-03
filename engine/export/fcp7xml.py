@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 from engine.contracts import EditDecisionList, EnergyTimeline, Project
 from engine.export.fcpxml import frames_at  # shared float->frame snapping (contract-only)
+from engine.timeline_model import AngleTrack, ImportedSequence
 
 XMEML_VERSION = "4"  # the version Premiere itself reads/writes
 
@@ -178,3 +179,127 @@ def write_fcp7xml(
     path = Path(out_path)
     path.write_text(xml, encoding="utf-8")
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Source-resolved export: multi-file angles, preserved sync/filters, real media
+# --------------------------------------------------------------------------- #
+
+
+def edit_decision_list_to_fcp7xml_sourced(
+    edl: EditDecisionList,
+    imported: ImportedSequence,
+    angle_tracks: dict[str, AngleTrack],
+    *,
+    duration_s: float,
+    energy: EnergyTimeline | None = None,
+) -> tuple[str, int]:
+    """Render an EDL against the parsed multicam timeline, resolving each cut to the correct
+    underlying file + source frames.
+
+    For every ``EditDecision`` the chosen angle's track is resolved over the decision's frame
+    range, splitting at source-file boundaries (so multi-file angles stay in sync) and
+    preserving each segment's source in-point and filters (e.g. the DSLR Distort). The master
+    audio block is re-emitted verbatim. Returns ``(xml, n_unresolved)`` — ``n_unresolved`` is
+    the count of decisions with no footage (should be 0 when availability is honored).
+    """
+    fps = imported.fps
+    timebase, ntsc = imported.timebase, imported.ntsc
+    total_frames = frames_at(duration_s, fps)
+    width, height = imported.width, imported.height
+
+    xmeml = ET.Element("xmeml", version=XMEML_VERSION)
+    sequence = ET.SubElement(xmeml, "sequence", id=f"seq-{edl.project_id}")
+    ET.SubElement(sequence, "name").text = edl.project_id
+    ET.SubElement(sequence, "duration").text = str(total_frames)
+    _rate(sequence, timebase, ntsc)
+    tc = ET.SubElement(sequence, "timecode")
+    _rate(tc, timebase, ntsc)
+    ET.SubElement(tc, "string").text = "00:00:00:00"
+    ET.SubElement(tc, "frame").text = "0"
+    ET.SubElement(tc, "displayformat").text = "NDF"
+
+    media = ET.SubElement(sequence, "media")
+    video = ET.SubElement(media, "video")
+    vfmt = ET.SubElement(video, "format")
+    schar = ET.SubElement(vfmt, "samplecharacteristics")
+    _rate(schar, timebase, ntsc)
+    ET.SubElement(schar, "width").text = str(width)
+    ET.SubElement(schar, "height").text = str(height)
+    track = ET.SubElement(video, "track")
+
+    emitted_files: set[str] = set()
+    n_unresolved = 0
+    clip_n = 0
+    for dec in edl.decisions:
+        at = angle_tracks.get(dec.angle_id)
+        if at is None:
+            raise ValueError(f"decision angle_id {dec.angle_id!r} has no parsed track")
+        t0f, t1f = frames_at(dec.t_start, fps), frames_at(dec.t_end, fps)
+        resolved = at.resolve(t0f, t1f)
+        if not resolved:
+            n_unresolved += 1
+            continue
+        for rc in resolved:
+            clip_n += 1
+            seg = rc.segment
+            clip = ET.SubElement(track, "clipitem", id=f"clipitem-{clip_n}")
+            ET.SubElement(clip, "name").text = seg.file_name
+            ET.SubElement(clip, "enabled").text = "TRUE"
+            file_dur = _file_duration_frames(seg.file_xml) or rc.src_out_f
+            ET.SubElement(clip, "duration").text = str(file_dur)
+            _rate(clip, timebase, ntsc)
+            ET.SubElement(clip, "start").text = str(rc.tl_start_f)
+            ET.SubElement(clip, "end").text = str(rc.tl_end_f)
+            ET.SubElement(clip, "in").text = str(rc.src_in_f)
+            ET.SubElement(clip, "out").text = str(rc.src_out_f)
+            if seg.file_id not in emitted_files:
+                clip.append(ET.fromstring(seg.file_xml))  # define-once, verbatim metadata
+                emitted_files.add(seg.file_id)
+            else:
+                ET.SubElement(clip, "file", id=seg.file_id)  # reference
+            for fx in seg.filters_xml:  # preserve e.g. the DSLR aspect Distort
+                clip.append(ET.fromstring(fx))
+
+    # Master audio: re-emit verbatim so the cut video stays synced to the music.
+    if imported.audio_xml:
+        media.append(ET.fromstring(imported.audio_xml))
+
+    for t, label in _markers(energy):
+        if t < 0 or t >= duration_s:
+            continue
+        marker = ET.SubElement(sequence, "marker")
+        ET.SubElement(marker, "name").text = label
+        ET.SubElement(marker, "comment").text = ""
+        ET.SubElement(marker, "in").text = str(frames_at(t, fps))
+        ET.SubElement(marker, "out").text = "-1"
+
+    ET.indent(xmeml, space="  ")
+    body = ET.tostring(xmeml, encoding="unicode")
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE xmeml>\n{body}\n', n_unresolved
+
+
+def _file_duration_frames(file_xml: str) -> int | None:
+    try:
+        d = ET.fromstring(file_xml).findtext("duration")
+        return int(d) if d is not None else None
+    except (ET.ParseError, ValueError):
+        return None
+
+
+def write_fcp7xml_sourced(
+    edl: EditDecisionList,
+    imported: ImportedSequence,
+    angle_tracks: dict[str, AngleTrack],
+    out_path: str | Path,
+    *,
+    duration_s: float,
+    energy: EnergyTimeline | None = None,
+) -> tuple[Path, int]:
+    """Render and write a source-resolved FCP7 ``.xml``; returns ``(path, n_unresolved)``."""
+    xml, n_unresolved = edit_decision_list_to_fcp7xml_sourced(
+        edl, imported, angle_tracks, duration_s=duration_s, energy=energy
+    )
+    path = Path(out_path)
+    path.write_text(xml, encoding="utf-8")
+    return path, n_unresolved

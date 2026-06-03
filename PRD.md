@@ -63,7 +63,11 @@ In priority order, the product must:
 5. **Produce an Edit Decision List** — an ordered set of cuts, each with a timestamp (snapped
    to a beat/phrase) and a chosen angle — from a deterministic fusion of the three signals,
    steerable by natural-language instructions.
-6. **Export a Premiere-importable multicam sequence** (FCPXML + markers) as the v1 deliverable.
+6. **Export a Premiere-importable cut sequence** (**FCP7 XML / `<xmeml>`** + markers) as the
+   v1 deliverable. (Originally FCPXML; Premiere Pro 2026 does **not** import `.fcpxml`, so the
+   primary surface is FCP7 XML — see §9 Q4.) An angle may be split across multiple media files
+   and may not span the whole timeline; the exporter resolves each cut to the correct file +
+   source frame and never shows an angle where it has no footage.
 7. **Be driven from Claude** via an MCP connector: the user prompts, Claude calls tools, the
    sequence is produced.
 8. **(Phase 2) Apply edits to an open Premiere project live** via a UXP panel.
@@ -131,6 +135,11 @@ emitted decision list. A human editor would keep most cuts and only nudge a mino
    rules-first, with an optional Claude pass for taste.)
 3. **Angle-scoring cost.** Scoring every angle across a full track on `clip` may be slow/pricey.
    Do we sample (score on a coarse grid, interpolate) or score densely? (Leaning sampled.)
-4. **FCPXML multicam fidelity.** Premiere's FCPXML multicam import is fragile; confirm the
-   exact element shape against PP 2026 on the first export. EDL is the fallback.
+4. **~~FCPXML multicam fidelity.~~ RESOLVED → FCP7 XML.** Premiere Pro 2026 does **not**
+   recognize `.fcpxml` at all (it isn't even listed in Import). Switched the primary export to
+   **FCP7 XML (`<xmeml>`)**, Premiere's native interchange, emitted as a single video track of
+   cuts (angle switch = cut) rather than a fragile multicam container. EDL (CMX3600) remains
+   the last-resort fallback. Multi-file angles, source-frame sync, the DSLR Distort filter, and
+   angle-availability windows are all preserved on export (see ARCHITECTURE §3.1). First real
+   set (`koshtoset.xml`) round-trips; **import into PP 2026 is the open validation step.**
 5. **Min/target angle count** for v1 (2 vs 3+).
