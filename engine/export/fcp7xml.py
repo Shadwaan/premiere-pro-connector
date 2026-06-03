@@ -204,11 +204,16 @@ def edit_decision_list_to_fcp7xml_sourced(
     """Render an EDL against the parsed multicam timeline, resolving each cut to the correct
     underlying file + source frames.
 
-    For every ``EditDecision`` the chosen angle's track is resolved over the decision's frame
-    range, splitting at source-file boundaries (so multi-file angles stay in sync) and
-    preserving each segment's source in-point and filters (e.g. the DSLR Distort). The master
-    audio block is re-emitted verbatim. Returns ``(xml, n_unresolved)`` — ``n_unresolved`` is
-    the count of decisions with no footage (should be 0 when availability is honored).
+    - Adjacent same-angle decisions are coalesced (FIX 1) so identical footage is not razored
+      into redundant back-to-back clips; real angle switches are preserved.
+    - Emits one ``<video><track>`` per angle (FIX 2, DSLR=V1 / GoPro=V2 by angle_id order);
+      tracks never overlap in time and their union gaplessly covers the timeline.
+    - Each clip is split at source-file boundaries (multi-file angles stay synced), keeps its
+      source in-point, and re-emits ALL ``<filter>`` blocks verbatim (Lumetri grade, Basic
+      Motion reframe, DSLR Distort, …). The master audio block is re-emitted verbatim.
+
+    Returns ``(xml, n_unresolved)`` — ``n_unresolved`` is the count of runs with no footage
+    (should be 0 when availability is honored).
     """
     fps = imported.fps
     timebase, ntsc = imported.timebase, imported.ntsc
@@ -233,50 +238,38 @@ def edit_decision_list_to_fcp7xml_sourced(
     _rate(schar, timebase, ntsc)
     ET.SubElement(schar, "width").text = str(width)
     ET.SubElement(schar, "height").text = str(height)
-    track = ET.SubElement(video, "track")
 
     emitted_files: set[str] = set()
     n_unresolved = 0
     clip_n = 0
-    for dec in edl.decisions:
-        at = angle_tracks.get(dec.angle_id)
+
+    # FIX 1 — coalesce consecutive same-angle decisions so identical footage is not razored
+    # into back-to-back clips. Run boundaries are exactly the real angle switches, which are
+    # all preserved; only redundant same-angle cut points disappear. File-boundary splits
+    # still happen inside AngleTrack.resolve().
+    runs = _coalesce_decisions(edl.decisions)
+    runs_by_angle: dict[str, list[tuple[float, float]]] = {}
+    for aid, t0, t1 in runs:
+        runs_by_angle.setdefault(aid, []).append((t0, t1))
+
+    # FIX 2 — one <video><track> per angle, deterministic order by angle_id (alphabetical;
+    # for this set DSLR=V1, GoPro=V2). Only one angle is active at any instant, so the tracks
+    # never overlap in time and their union gaplessly covers [0, total_frames].
+    for aid in sorted(runs_by_angle):
+        at = angle_tracks.get(aid)
         if at is None:
-            raise ValueError(f"decision angle_id {dec.angle_id!r} has no parsed track")
-        t0f, t1f = frames_at(dec.t_start, fps), frames_at(dec.t_end, fps)
-        resolved = at.resolve(t0f, t1f)
-        if not resolved:
-            n_unresolved += 1
-            continue
-        for rc in resolved:
-            clip_n += 1
-            seg = rc.segment
-            clip = ET.SubElement(track, "clipitem", id=f"clipitem-{clip_n}")
-            # masterclipid links every instance of a source file to ONE bin master clip.
-            # Without it Premiere imports the media but silently drops the sequence (the
-            # bug that made the timeline fail to appear). One master clip per source file.
-            ET.SubElement(clip, "masterclipid").text = f"masterclip-{seg.file_id}"
-            ET.SubElement(clip, "name").text = seg.file_name
-            ET.SubElement(clip, "enabled").text = "TRUE"
-            file_dur = _file_duration_frames(seg.file_xml) or rc.src_out_f
-            ET.SubElement(clip, "duration").text = str(file_dur)
-            _rate(clip, timebase, ntsc)
-            ET.SubElement(clip, "start").text = str(rc.tl_start_f)
-            ET.SubElement(clip, "end").text = str(rc.tl_end_f)
-            ET.SubElement(clip, "in").text = str(rc.src_in_f)
-            ET.SubElement(clip, "out").text = str(rc.src_out_f)
-            # Premiere's native tick timing + the standard clip metadata it writes itself.
-            ET.SubElement(clip, "pproTicksIn").text = str(_ppro_ticks(rc.src_in_f, fps))
-            ET.SubElement(clip, "pproTicksOut").text = str(_ppro_ticks(rc.src_out_f, fps))
-            ET.SubElement(clip, "alphatype").text = "none"
-            ET.SubElement(clip, "pixelaspectratio").text = "square"
-            ET.SubElement(clip, "anamorphic").text = "FALSE"
-            if seg.file_id not in emitted_files:
-                clip.append(ET.fromstring(seg.file_xml))  # define-once, verbatim metadata
-                emitted_files.add(seg.file_id)
-            else:
-                ET.SubElement(clip, "file", id=seg.file_id)  # reference
-            for fx in seg.filters_xml:  # preserve e.g. the DSLR aspect Distort
-                clip.append(ET.fromstring(fx))
+            raise ValueError(f"decision angle_id {aid!r} has no parsed track")
+        atrack = ET.SubElement(video, "track")
+        for t0, t1 in runs_by_angle[aid]:
+            resolved = at.resolve(frames_at(t0, fps), frames_at(t1, fps))
+            if not resolved:
+                n_unresolved += 1
+                continue
+            for rc in resolved:
+                clip_n += 1
+                _emit_clipitem(atrack, clip_n, rc, fps, timebase, ntsc, emitted_files)
+        ET.SubElement(atrack, "enabled").text = "TRUE"
+        ET.SubElement(atrack, "locked").text = "FALSE"
 
     # Master audio: re-emit verbatim so the cut video stays synced to the music.
     if imported.audio_xml:
@@ -302,6 +295,52 @@ def _file_duration_frames(file_xml: str) -> int | None:
         return int(d) if d is not None else None
     except (ET.ParseError, ValueError):
         return None
+
+
+def _coalesce_decisions(decisions) -> list[tuple[str, float, float]]:
+    """Merge consecutive decisions with the same angle_id into (angle_id, t_start, t_end)
+    runs. Contiguity (next t_start == prev t_end) is required to merge — a real angle switch
+    always starts a new run, so every switch is preserved."""
+    runs: list[list] = []
+    for d in decisions:
+        if runs and runs[-1][0] == d.angle_id and abs(runs[-1][2] - d.t_start) < 1e-6:
+            runs[-1][2] = d.t_end
+        else:
+            runs.append([d.angle_id, d.t_start, d.t_end])
+    return [(a, b, c) for a, b, c in runs]
+
+
+def _emit_clipitem(track, clip_id, rc, fps, timebase, ntsc, emitted_files) -> None:
+    """Emit one resolved clip as a Premiere-shaped <clipitem> (masterclipid + ppro ticks +
+    standard metadata + verbatim source-file def/ref + ALL preserved <filter> blocks)."""
+    seg = rc.segment
+    clip = ET.SubElement(track, "clipitem", id=f"clipitem-{clip_id}")
+    # masterclipid links every instance of a source file to ONE bin master clip. Without it
+    # Premiere imports the media but silently drops the sequence (the earlier import bug).
+    ET.SubElement(clip, "masterclipid").text = f"masterclip-{seg.file_id}"
+    ET.SubElement(clip, "name").text = seg.file_name
+    ET.SubElement(clip, "enabled").text = "TRUE"
+    file_dur = _file_duration_frames(seg.file_xml) or rc.src_out_f
+    ET.SubElement(clip, "duration").text = str(file_dur)
+    _rate(clip, timebase, ntsc)
+    ET.SubElement(clip, "start").text = str(rc.tl_start_f)
+    ET.SubElement(clip, "end").text = str(rc.tl_end_f)
+    ET.SubElement(clip, "in").text = str(rc.src_in_f)
+    ET.SubElement(clip, "out").text = str(rc.src_out_f)
+    ET.SubElement(clip, "pproTicksIn").text = str(_ppro_ticks(rc.src_in_f, fps))
+    ET.SubElement(clip, "pproTicksOut").text = str(_ppro_ticks(rc.src_out_f, fps))
+    ET.SubElement(clip, "alphatype").text = "none"
+    ET.SubElement(clip, "pixelaspectratio").text = "square"
+    ET.SubElement(clip, "anamorphic").text = "FALSE"
+    if seg.file_id not in emitted_files:
+        clip.append(ET.fromstring(seg.file_xml))  # define-once, verbatim metadata
+        emitted_files.add(seg.file_id)
+    else:
+        ET.SubElement(clip, "file", id=seg.file_id)  # reference
+    # Preserve EVERY <filter> on the source clip verbatim — Lumetri (grade), Basic Motion
+    # (reframe), Distort (DSLR aspect), etc. Generic: not specific to any one effect.
+    for fx in seg.filters_xml:
+        clip.append(ET.fromstring(fx))
 
 
 def write_fcp7xml_sourced(

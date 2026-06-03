@@ -8,6 +8,51 @@ still open.
 
 ---
 
+## 2026-06-04 · `PPC-007` (export polish) · coalesce cuts, per-angle tracks, filter audit
+
+Two export-only fixes (no CONTRACTS/fusion change) + a grade/framing-preservation audit on a
+newly graded source `KoshtoNewSet.xml` → `koshtonewset_autocut.xml`.
+
+**FIX 1 — coalesce redundant same-angle cuts.** `edit_decision_list_to_fcp7xml_sourced` now
+merges consecutive decisions with the same `angle_id` into one continuous range *before*
+resolving (`_coalesce_decisions`), then still splits at real source-file boundaries via
+`AngleTrack.resolve`. Every GoPro↔DSLR switch is preserved (a switch starts a new run); only
+back-to-back razor cuts on identical footage disappear. **Clip count 697 → 251.** (695
+decisions → 249 runs + 2 file-boundary splits = 251.)
+
+**FIX 2 — one `<video><track>` per angle.** Deterministic order by `angle_id`
+(alphabetical → **DSLR = V1, GoPro = V2**). Each track carries only its angle's clips at their
+timeline positions (implicit gaps elsewhere). Verified: **no overlap within a track**, and the
+**union of both tracks gaplessly covers [0, 51731]**. Audio re-emitted verbatim as before.
+
+**FILTER AUDIT (the main ask).**
+- (a) `KoshtoNewSet.xml` per-source-clip filters Premiere actually wrote:
+  - GoPro `GX010465`/`GX020465`: **Basic Motion** (scale/rotation/center/crop = the reframe) +
+    **Lumetri** (the grade; `<effectid>Lumetri</effectid><effecttype>filter</effecttype>`).
+  - DSLR `MVI_4017`/`MVI_4018`: Basic Motion + Lumetri + **Distort** (aspect).
+  - Audio: none.
+  - **Lumetri SURVIVED Premiere's FCP7-XML export** — it is NOT dropped (format is fine). The
+    reframe is carried as **Basic Motion** (not Distort). No standalone opacity filter was
+    present (none applied).
+- (b) Our code never dropped any filter type: `fcp7_import` captures `clip.findall("filter")`
+  (ALL `<filter>`s) and the exporter re-emits each verbatim — generic, not Distort-specific.
+- (c) In `koshtonewset_autocut.xml`: **0 clips whose filter set differs from their source
+  clip.** All 126 GoPro clips carry `[Basic Motion, Lumetri]`; all 125 DSLR clips carry
+  `[Basic Motion, Lumetri, Distort]`. Grade + reframe + aspect all preserved on every cut.
+
+**Also intact:** masterclipid/pproTicks on all 251 clips (0 missing); `n_unresolved = 0`
+(implied by gapless full coverage); duration 51731.
+
+**Tests:** added `test_fix1_coalesces_adjacent_same_angle`,
+`test_fix2_one_track_per_angle_dslr_v1_gopro_v2`,
+`test_fix2_tracks_no_overlap_and_union_gapless`, `test_real_switches_preserved`.
+**98 offline tests pass.**
+
+### Next up
+- `PPC-008`: golden-clip eval (cut-on-beat accuracy + keep-rate) — last Phase-0 task.
+
+---
+
 ## 2026-06-03 · `PPC-007` (fix) · sequence dropped on import — missing `<masterclipid>`
 
 **Symptom.** Premiere Pro 2026 imported the MEDIA (files landed in the bin) but the

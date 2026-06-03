@@ -144,3 +144,102 @@ def test_markers_emitted_from_energy():
     labels = [m.findtext("name") for m in markers]
     assert "intro" in labels and "drop section" in labels
     assert any(l.startswith("DROP") for l in labels)
+
+
+# --------------------------------------------------------------------------- #
+# FIX 1 (coalesce same-angle) + FIX 2 (per-angle tracks) — two angles
+# --------------------------------------------------------------------------- #
+
+
+def _imported_2angle() -> ImportedSequence:
+    return ImportedSequence(
+        name="demo2",
+        fps=10.0,
+        timebase=10,
+        ntsc=False,
+        duration_f=80,
+        width=1920,
+        height=1080,
+        angles=[
+            AngleTrack("GoPro", "GoPro", [_seg("file-g", 0, 80, 0)]),
+            AngleTrack("DSLR", "DSLR", [_seg("file-d", 0, 80, 0)]),
+        ],
+        audio_files=[],
+        audio_xml="<audio><track><clipitem id='ca'><file id='file-5'><name>m.wav</name></file></clipitem></track></audio>",
+    )
+
+
+def _edl_2angle() -> EditDecisionList:
+    # 4 decisions; the first two are the SAME angle (GoPro) and must coalesce; then a real
+    # switch to DSLR, then back to GoPro. fps 10 -> seconds*10 = frames.
+    d = [
+        EditDecision(index=0, t_start=0.0, t_end=2.0, angle_id="GoPro", reason="x"),
+        EditDecision(index=1, t_start=2.0, t_end=4.0, angle_id="GoPro", reason="x"),  # redundant
+        EditDecision(index=2, t_start=4.0, t_end=6.0, angle_id="DSLR", reason="x"),   # switch
+        EditDecision(index=3, t_start=6.0, t_end=8.0, angle_id="GoPro", reason="x"),  # switch
+    ]
+    return EditDecisionList(project_id="demo2", params=EditParams(), decisions=d)
+
+
+def _angle_tracks(imp):
+    return {a.angle_id: a for a in imp.angles}
+
+
+def test_fix1_coalesces_adjacent_same_angle():
+    imp = _imported_2angle()
+    xml, n = edit_decision_list_to_fcp7xml_sourced(
+        _edl_2angle(), imp, _angle_tracks(imp), duration_s=8.0
+    )
+    assert n == 0
+    root = ET.fromstring(xml)
+    clips = root.findall("sequence/media/video/track/clipitem")
+    assert len(clips) == 3  # 4 decisions -> 3 clips (the two GoPro decisions merged)
+    # The merged GoPro [0,4] becomes ONE clip spanning frames 0..40.
+    gopro = [c for c in clips if c.findtext("name") == "file-g.mov"]
+    assert any(c.findtext("start") == "0" and c.findtext("end") == "40" for c in gopro)
+
+
+def test_fix2_one_track_per_angle_dslr_v1_gopro_v2():
+    imp = _imported_2angle()
+    xml, _ = edit_decision_list_to_fcp7xml_sourced(
+        _edl_2angle(), imp, _angle_tracks(imp), duration_s=8.0
+    )
+    root = ET.fromstring(xml)
+    tracks = root.findall("sequence/media/video/track")
+    assert len(tracks) == 2
+    # alphabetical angle order -> DSLR on V1 (first), GoPro on V2 (second).
+    v1_files = {c.findtext("name") for c in tracks[0].findall("clipitem")}
+    v2_files = {c.findtext("name") for c in tracks[1].findall("clipitem")}
+    assert v1_files == {"file-d.mov"}  # DSLR only
+    assert v2_files == {"file-g.mov"}  # GoPro only
+
+
+def test_fix2_tracks_no_overlap_and_union_gapless():
+    imp = _imported_2angle()
+    xml, _ = edit_decision_list_to_fcp7xml_sourced(
+        _edl_2angle(), imp, _angle_tracks(imp), duration_s=8.0
+    )
+    root = ET.fromstring(xml)
+    tracks = root.findall("sequence/media/video/track")
+    total = int(root.findtext("sequence/duration"))
+    spans = []
+    for tr in tracks:
+        clips = [(int(c.findtext("start")), int(c.findtext("end"))) for c in tr.findall("clipitem")]
+        for a, b in zip(clips, clips[1:]):
+            assert a[1] <= b[0], "overlap within a track"  # no overlap within track
+        spans.extend(clips)
+    spans.sort()
+    assert spans[0][0] == 0 and spans[-1][1] == total  # covers [0, total]
+    for a, b in zip(spans, spans[1:]):
+        assert a[1] == b[0], "gap in union of tracks"  # gapless union
+
+
+def test_real_switches_preserved():
+    imp = _imported_2angle()
+    xml, _ = edit_decision_list_to_fcp7xml_sourced(
+        _edl_2angle(), imp, _angle_tracks(imp), duration_s=8.0
+    )
+    root = ET.fromstring(xml)
+    clips = root.findall("sequence/media/video/track/clipitem")
+    names = {c.findtext("name") for c in clips}
+    assert names == {"file-g.mov", "file-d.mov"}  # both angles present (switches kept)
