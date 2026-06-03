@@ -8,6 +8,40 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-004` · provider protocols + fake providers
+
+**Changed**
+- `engine/providers/base.py`: `TranscriberProvider` / `AngleScoringProvider` Protocols
+  (`@runtime_checkable`), exact CONTRACTS.md shapes. Engine depends on these, never on
+  Modal/HTTP — real adapters slot behind them in Phase 1.
+- `engine/providers/fakes.py`: `FakeTranscriber` + `FakeAngleScorer` — deterministic,
+  **no network, no media files**. Seeds derive from a CRC32 of the angle id (not Python's
+  salted `hash()`), so different angles get different-but-reproducible interest curves and
+  fusion has a real choice to make. Generic data — nothing tuned to any track.
+- `engine/providers/__init__.py`: re-exports protocols + fakes.
+- `tests/test_providers.py`: protocol conformance, determinism, unit-range fields,
+  angle distinctness, arg validation, and an offline data-flow test that assembles exactly
+  the inputs fusion will consume. **11 new tests; 48 offline tests pass (57 incl. audio).**
+
+**Design notes**
+- The protocol `score(angle, hop_s)` carries no duration, so `FakeAngleScorer` takes
+  `duration_s` at construction (the CLI/test knows the master timeline length). The real
+  Phase-1 adapter will probe the media instead.
+- `FakeTranscriber` places generic cues (intro to-camera line, two repeated lyric hooks,
+  closing to-camera line) at fractions of duration, or accepts injected cues. Gives
+  fusion's semantic-override path (`is_hook` / `to_camera`) something to act on.
+
+**Gate (PPC-004: "Fusion runs end-to-end on fakes, no network")** — provider half done:
+the fakes produce every input fusion needs with zero I/O (verified by
+`test_provider_layer_produces_fusion_inputs_offline`). The *literal* end-to-end run
+through fusion is closed at PPC-005, when `fusion.py` exists.
+
+### Next up
+- `PPC-005`: `fusion.py` per ARCHITECTURE §4 and the FUSION DECISION recorded in the
+  PPC-003 entry above. **Pausing for user go-ahead before starting (per instruction).**
+
+---
+
 ## 2026-06-03 · `PPC-003` · energy curve + section/drop detection
 
 **Changed**
@@ -41,14 +75,34 @@ coherent intro→drop→breakdown→drop→…→outro map.
 - Sections (abbrev): intro 0:00–0:31 → drop 0:31–0:56 → breakdown 0:56–1:31 → drop
   1:31–1:56 → … → breakdown 3:31–4:02 → drop 4:02–4:56 → outro 5:13–end.
 
-**Gate (PPC-003: "drop detected within ±0.3 s") — ⚠️ NOT YET MET / PENDING.** Per the
-task instruction, awaiting the user's by-ear confirmation of the real drop times before
-locking the gate. No drop time was hardcoded for "Voodoo". If the user's times differ,
-tune `rise_min` / `hi_q` / band edge and re-report.
+**Gate (PPC-003: "drop detected within ±0.3 s") — ✅ MET (by user confirmation,
+2026-06-03).** The user verified by ear that the 3 hard onset-drops (0:29.6, 1:30.1,
+4:03.3) are correct; they also align with section-map boundaries. This is *not* a
+tapped-ground-truth measurement — no reference taps exist. **Final, objective validation
+of drop timing is deferred to the first real edit (PPC-006/007)**, where cuts landing on
+the drops can be judged against the footage. Recorded here rather than overclaiming an
+automated check. `rise_min` left at 0.30 (highest precision; lowering it regressed the
+confirmed 4:03 onset to 4:01 and added re-trigger false positives at 1:45/2:45 — see
+sweep in conversation).
+
+**Recall note (intentional):** the soft drops at ~2:31 and ~3:00 rise out of a
+mid-energy passage, not a breakdown, so they are *not* in the hard-onset `drops` list.
+They ARE captured as "drop"-kind sections in the section map. Nothing is discarded.
+
+**FUSION DECISION (for PPC-005), agreed with user:**
+- **Cut density** tracks the *full* ~11-section energy map + beat phrasing (downbeat /
+  phrase grid) — not just the drops. Longer holds in low-energy sections, faster cuts in
+  high-energy ones.
+- **Aggression-boost zones** = the 4 `"drop"`-kind **sections** (≈0:31, 1:31, 2:31, 4:01)
+  — cuts get faster across these whole regions.
+- **Strongest boost** = the 3 **hard onset-drops** (0:29.6, 1:30.1, 4:03.3) — the
+  highest-confidence subset, get the most aggressive cutting right at the onset.
+- **Nothing in the section map is discarded** — every section informs cut density;
+  drops are a confidence-ranked overlay on top, not a replacement.
 
 ### Next up
-- Confirm drop times with user → lock PPC-003 gate. Then `PPC-004`: provider protocols +
-  fakes (transcriber, angle scoring) so fusion can run offline.
+- `PPC-004`: provider protocols (`TranscriberProvider`, `AngleScoringProvider`) + **fake**
+  implementations so fusion (PPC-005) runs fully offline, no network.
 
 ---
 
