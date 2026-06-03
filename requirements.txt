@@ -1,0 +1,12 @@
+# Premiere Pro Connector — pinned dependencies.
+# Versions are pinned because madmom (added at PPC-002) is finicky with NumPy/Cython;
+# the whole stack must resolve together in a clean env (AGENTS.md §4, ARCHITECTURE §5).
+
+# --- Contracts (PPC-001) ---
+pydantic==2.12.5
+
+# --- Audio timing (PPC-002/003) ---
+# Added once madmom is verified to install cleanly in this venv. Do not add unpinned.
+
+# --- Dev / test ---
+pytest==8.4.2

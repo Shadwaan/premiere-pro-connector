@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual env
+.venv/
+venv/
+
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Local media / scratch (test tracks, exports) — keep heavy/binary assets out of git
+*.wav
+*.mp3
+*.mov
+*.mp4
+*.fcpxml
+/scratch/
+/media/

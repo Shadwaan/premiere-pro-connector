@@ -1,0 +1,11 @@
+[project]
+name = "premiere-pro-connector"
+version = "0.1.0"
+description = "DJ multicam auto-editor engine driven by Claude (see PRD.md / ARCHITECTURE.md)."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+# Put the project root on sys.path so `import engine` works without an install.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra"
