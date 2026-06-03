@@ -9,3 +9,6 @@ requires-python = ">=3.11"
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = [
+    "audio: real-audio analysis tests; slow and require media/test_track.wav (deselect with -m 'not audio')",
+]

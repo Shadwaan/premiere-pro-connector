@@ -8,6 +8,52 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-002` · beat grid (madmom) + librosa fallback
+
+**Changed**
+- `engine/audio_timing/` package: `beats.py` (madmom `RNNDownBeatProcessor` →
+  `DBNDownBeatTrackingProcessor`, librosa fallback, and a pure reduction helper
+  `beat_grid_from_downbeat_array`) + `__init__.py` exposing `detect_beat_grid`.
+- `tests/test_audio_timing.py`: offline reduction/BPM tests (always run) + real-audio
+  gate tests marked `@pytest.mark.audio` (skip if `media/test_track.wav` absent).
+- `requirements.txt`: pinned the full audio stack. `pyproject.toml`: registered the
+  `audio` marker.
+- **35 tests pass** (26 contracts + 9 audio) in ~78 s.
+
+**Test track:** "Biscits – Voodoo" downloaded via yt-dlp → `media/test_track.wav`
+(PCM s16le, 48 kHz stereo, 334.87 s). Git-ignored.
+
+**Gate (PPC-002: "Beats within ±1 frame of manual taps")** — met by proxy. On the real
+track: BPM 127.66 (~128 expected ✓), 712 beats / 178 downbeats, inter-beat-interval
+std 0.0066 s (≈⅕ of a 30 fps frame), and **≥95 % of inter-beat intervals within ±1
+frame** of the median — the same 95 %/±1-frame bar PRD §8 sets. ⚠️ *Literal* manual-tap
+comparison still needs user-tapped ground truth or a hand-labelled reference; the
+frame-stability + cross-engine (madmom vs librosa) tempo agreement is the automatic
+stand-in. Offer open: tap along / supply a reference if you want the literal check.
+
+**madmom install (the finicky bit — verified in the clean venv):**
+- **No working PyPI release for Python 3.11.** Built from git master, commit
+  `27f032e8947204902c675e5e341a3faf5dc86dae` (reports as `madmom 0.17.dev0`).
+- NumPy **1.26.4** is the stack anchor: newest NumPy that madmom builds against *and*
+  that librosa/numba/scipy accept on 3.11. Cython pinned to **0.29.37** (madmom's `.pyx`
+  use 0.29 idioms; Cython 3 not used). scipy 1.13.1.
+- Windows build recipe (MSVC Build Tools 2026 present; not on PATH by default):
+  1. `pip install numpy==1.26.4 scipy==1.13.1 cython==0.29.37 "wheel" "setuptools<81"`
+  2. from a `vcvars64.bat`-initialised shell:
+     `pip install --no-build-isolation git+https://github.com/CPJKU/madmom.git@27f032e…`
+  Plain `pip install -r requirements.txt` will **not** replicate this (needs vcvars +
+  `--no-build-isolation`); follow the two steps above on a fresh machine.
+- Beats-per-bar defaulted to `(4,)` — DJ/EDM is 4/4; restricting the meter improves
+  downbeat accuracy vs also allowing 3/4. RNN/DBN fps = 100 (madmom activation rate).
+- Full madmom pass on the 5.5-min track ≈ 46 s (single-threaded). Fine for v1.
+
+### Next up
+- `PPC-003`: energy curve (librosa RMS/spectral flux) + section/drop detection, then the
+  composing `analyze(audio_path) -> (BeatGrid, EnergyTimeline)`. Gate: drop detected
+  within ±0.3 s. (Awaiting your go-ahead.)
+
+---
+
 ## 2026-06-03 · `PPC-001` · contracts frozen + round-trip test
 
 **Changed**

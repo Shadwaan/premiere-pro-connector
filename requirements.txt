@@ -1,12 +1,30 @@
 # Premiere Pro Connector — pinned dependencies.
-# Versions are pinned because madmom (added at PPC-002) is finicky with NumPy/Cython;
-# the whole stack must resolve together in a clean env (AGENTS.md §4, ARCHITECTURE §5).
+#
+# Versions are pinned together because madmom is finicky with NumPy/Cython
+# (AGENTS.md §4, ARCHITECTURE §5). NumPy 1.26.4 is the anchor: it is the newest
+# release that madmom builds against AND that librosa/numba/scipy all accept on
+# Python 3.11. Do not bump numpy without re-verifying the whole stack in a clean venv.
+#
+# ffmpeg must be on PATH (audio decoding for non-WAV inputs). Verified: ffmpeg 8.1.
 
 # --- Contracts (PPC-001) ---
 pydantic==2.12.5
 
-# --- Audio timing (PPC-002/003) ---
-# Added once madmom is verified to install cleanly in this venv. Do not add unpinned.
+# --- Audio timing: build anchors (must be present BEFORE building madmom) ---
+numpy==1.26.4
+scipy==1.13.1
+cython==0.29.37          # madmom's .pyx use Cython 0.29 idioms; do not use Cython 3.x
+
+# --- Audio timing: beats/downbeats (PPC-002) ---
+# No working PyPI wheel for Python 3.11, so pin the git commit verified to build here.
+# REQUIRES a C compiler (MSVC Build Tools on Windows) and --no-build-isolation so it
+# builds against the numpy/cython above. See docs/BUILD_LOG.md (PPC-002) for the exact
+# Windows build command. Build deps wheel/setuptools<81 must also be installed first.
+madmom @ git+https://github.com/CPJKU/madmom.git@27f032e8947204902c675e5e341a3faf5dc86dae
+
+# --- Audio timing: energy/sections + beat-tracking fallback (PPC-002 fallback, PPC-003) ---
+librosa==0.10.2.post1
+soundfile==0.12.1
 
 # --- Dev / test ---
 pytest==8.4.2
