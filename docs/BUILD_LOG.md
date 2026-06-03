@@ -8,6 +8,50 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-003` · energy curve + section/drop detection
+
+**Changed**
+- `engine/audio_timing/energy.py`: energy curve (librosa) + pure
+  `detect_sections_from_energy` / `detect_drops_from_energy` + audio I/O
+  `compute_energy_timeline`. Pure logic split from I/O, same pattern as `beats.py`.
+- `engine/audio_timing/analyze.py`: composing `analyze(audio_path) -> (BeatGrid,
+  EnergyTimeline)` (the CONTRACTS.md entrypoint). `__init__.py` re-exports it.
+- `tests/test_energy.py`: offline synthetic section/drop tests + `@audio` real-track
+  tests (curve normalized, sections tile gap-free, drops non-empty, analyze returns both).
+- **Full suite: 46 tests pass** (contracts 26, beats 9, energy 11).
+
+**Energy curve design (the substantive decision).** First cut used full-band RMS(dB) —
+on the real track every section came out 0.63–0.78 (flat) and only one drop was found.
+Root cause: in EDM overall loudness barely dips in a breakdown (vocals/synths stay loud);
+what drops out is the **kick/bass**. Rebuilt the curve as a weighted blend of
+**low-band power (≤250 Hz, weight 0.55)** + full-band loudness (0.30) + spectral flux
+(0.15), each log-compressed and normalized. Result: full 0..1 dynamic range and a
+coherent intro→drop→breakdown→drop→…→outro map.
+
+**Two bugs the synthetic tests caught (before any real-audio run):**
+1. Section levels used strict `>` against the `hi` quantile, which equals the plateau
+   value → nothing classified as high → zero "drop" sections. Fixed to `>=`.
+2. Drop detection required the pre-dip to be ≤ an absolute `lo` quantile; a short dip
+   smooths above `lo`, so the first drop was missed. Replaced with: large *rise* to a
+   high post-level (the rise itself marks the dip). More robust.
+
+**Detect-and-report on `media/test_track.wav` ("Voodoo"):**
+- Drops: **0:29.60 (29.60 s), 1:30.10 (90.10 s), 4:03.30 (243.30 s)** — the three main
+  breakdown→drop transitions.
+- Sections (abbrev): intro 0:00–0:31 → drop 0:31–0:56 → breakdown 0:56–1:31 → drop
+  1:31–1:56 → … → breakdown 3:31–4:02 → drop 4:02–4:56 → outro 5:13–end.
+
+**Gate (PPC-003: "drop detected within ±0.3 s") — ⚠️ NOT YET MET / PENDING.** Per the
+task instruction, awaiting the user's by-ear confirmation of the real drop times before
+locking the gate. No drop time was hardcoded for "Voodoo". If the user's times differ,
+tune `rise_min` / `hi_q` / band edge and re-report.
+
+### Next up
+- Confirm drop times with user → lock PPC-003 gate. Then `PPC-004`: provider protocols +
+  fakes (transcriber, angle scoring) so fusion can run offline.
+
+---
+
 ## 2026-06-03 · `PPC-002` · beat grid (madmom) + librosa fallback
 
 **Changed**
