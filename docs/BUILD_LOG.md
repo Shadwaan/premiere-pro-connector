@@ -8,6 +8,48 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-006` (pivot) · FCP7 XML exporter — Premiere rejected .fcpxml
+
+**Why the pivot.** User tested the FCPXML import: **Premiere Pro 2026 does not recognize
+`.fcpxml`** — in File ▸ Import with "All Supported Media" the file doesn't even appear in
+the list. Premiere's native interchange is **Final Cut Pro 7 XML** (`<xmeml>`, `.xml`), so
+the exporter now targets that.
+
+**Changed**
+- `engine/export/fcp7xml.py`: `edit_decision_list_to_fcp7xml(...)` + `write_fcp7xml(...)`.
+  Same cut sequence + markers as the FCPXML version, serialized as FCP7 XML:
+  `<xmeml version="4"><sequence>` with `<rate><timebase>/<ntsc>`, a single `<video><track>`
+  of `<clipitem>`s (`start/end` timeline frames, `in/out` source frames — equal, since
+  angles are pre-synced), `<file>` defined once per angle then referenced by `id` with
+  `<pathurl>file://localhost/…`, clip `<comment>` = fusion reason, and **true
+  sequence-level `<marker>`s** (an FCP7-XML advantage over FCPXML clip markers).
+- `engine/export/__init__.py`: **FCP7 XML is now the default** (`write_sequence` /
+  `edit_decision_list_to_sequence` alias it). `fcpxml.py` kept as secondary/reference.
+- `tests/test_fcp7xml.py`: 9 tests mirroring the FCPXML ones (timebase/ntsc mapping,
+  well-formedness, 1:1 clip mapping, gapless frame-accurate start/end/in/out, file
+  define-once-then-reference, reason comment, sequence-level markers + frames, no-energy →
+  no-markers, bad angle raises). **79 offline tests pass.**
+
+**Frame model.** Times are whole frames under `<rate>`: integer fps → `(timebase=fps,
+ntsc=FALSE)`; NTSC 23.976/29.97/59.94 → `(24/30/60, ntsc=TRUE)`. Frame snapping reuses
+`fcpxml.frames_at` (the single float→frame function). Clip end−start in frames keeps clips
+gapless after snapping.
+
+**Sample artifact**: `media/voodoo_sample.xml` (git-ignored), real "Voodoo" EDL, 2 placeholder
+angles (GoPro `D:/footage/voodoo/gopro.mp4`, DSLR `dslr.mov`), fps 30, brief "fast cuts on
+the drop, hold on the hook": **135 clipitems, 22 sequence markers, 72 KB, well-formed**;
+duration 10046 frames (334.87 s); DROP markers at frame 888 (29.60 s) / 2703 (90.10 s) etc.
+
+**Gate (PPC-006: "file imports into PP 2026 as a multicam/sequence")** — FCP7 `.xml`
+generated & well-formed; **actual Premiere import is the user's next validation step.**
+EDL (CMX3600) remains the last-resort fallback if FCP7 XML also fights us (not built).
+
+### Next up (unchanged)
+- `PPC-007`: `cli.py` — one command on a project folder → `.xml`. **Pausing for the user's
+  FCP7-XML import sanity-check first.**
+
+---
+
 ## 2026-06-03 · `PPC-006` · FCPXML exporter
 
 **Changed**
