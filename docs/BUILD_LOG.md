@@ -8,6 +8,49 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-005` · fusion (deterministic edit-decision logic)
+
+**Changed**
+- `engine/fusion.py`: `fuse(...)`, `propose_cuts(...)`, `map_brief_to_params(...)` per
+  ARCHITECTURE §4 + the FUSION DECISION (PPC-003 entry).
+- `tests/test_fusion.py`: 11 tests — invariants, hysteresis, drop-aggression,
+  drop-section-vs-non-drop, semantic override, max-consecutive cap, brief mapping, and an
+  **end-to-end run on the real fake providers** (offline). **59 offline tests pass.**
+
+**How it works**
+- *Candidate cuts*: grid per `EditParams.snap` (beat / downbeat / phrase, `phrase_downbeats`
+  configurable, default 4) ∪ section boundaries (forced cuts, snapped to grid). Section
+  transitions are the structural cuts.
+- *Density*: target shot length = `HOLD_MAX(8s) → HOLD_MIN(max(min_shot_len,1s))` scaled by
+  `intensity = 0.4·cut_density + 0.6·energy(t)`, `+0.25·drop_aggression` in a `"drop"`
+  section, `+0.45·drop_aggression` within [−1s,+8s] of a hard onset-drop. Full section map
+  drives density; drops are the confidence-ranked overlay (nothing discarded).
+- *Angle choice*: per segment, mean interest (interpolated from the score timeline) +
+  hysteresis (reward staying = `switch_penalty`) + staleness cap (`max_consecutive_s` forces
+  a switch). Deterministic argmax (tie-break by angle id).
+- *Semantic override*: a segment overlapping an `is_hook`/`to_camera` cue adds
+  `face_bias_on_vocals · mean_face` → pulls to the best-face angle.
+- *Invariants enforced* by `_validate()` before returning: `t_start[0]==0`,
+  `t_end[-1]==duration`, contiguous, sequential indices, real angle ids, every reason set.
+
+**Gate (PPC-005: "emits a valid EditDecisionList, all invariants hold")** — ✅ met
+(`test_end_to_end_on_fakes_offline_is_valid` + `_validate`).
+**Gate (PPC-004: "fusion runs end-to-end on fakes, no network")** — ✅ now closed by the
+same end-to-end test (synthetic beat grid/energy + FakeTranscriber + FakeAngleScorer →
+valid EDL, zero I/O).
+
+**Sample on the real track** ("Voodoo", brief "fast cuts on the drop, hold on the hook",
+3 fake angles): 135 decisions, 53 switches, shot length 1.87–6.34 s (mean 2.48).
+Cuts-by-kind: intro 8, drop 76, breakdown 21, other 24, outro 6 — drops cut at 1 bar
+(1.87 s), intro holds 3–6 s. Reason strings are ASCII (`hook->B`) for Windows-console
+safety. Shown to user for sanity check before PPC-006.
+
+### Next up
+- `PPC-006`: `export/fcpxml.py` — `EditDecisionList` → Premiere-importable multicam FCPXML +
+  markers. **Pausing for user sanity-check of the sample EDL first.**
+
+---
+
 ## 2026-06-03 · `PPC-004` · provider protocols + fake providers
 
 **Changed**
