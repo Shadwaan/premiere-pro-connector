@@ -8,6 +8,68 @@ still open.
 
 ---
 
+## 2026-06-03 · `PPC-006` · FCPXML exporter
+
+**Changed**
+- `engine/export/fcpxml.py`: `edit_decision_list_to_fcpxml(...)` + `write_fcpxml(...)`, plus
+  frame-snapping helpers (`frame_duration`, `frames_at`, `rational_time`).
+- `engine/export/__init__.py`. `tests/test_fcpxml.py`: 11 tests (frame-snapping incl. NTSC,
+  well-formedness, one-asset-per-angle + file URIs, decision→clip 1:1, gapless frame-accurate
+  mapping, reason `<note>`, marker placement/labels/time, no-energy→no-markers, bad angle
+  raises). **70 offline tests pass.**
+
+**Surface form chosen (PRD §9 Q4): single sequence, angle clips cut onto one video track**
+— NOT a true `<mc-clip>`/`<multicam>` container. Reason: FCPXML multicam import into Premiere
+is known-fragile; a cut sequence gives the identical visual result (angle switches = cuts),
+imports far more reliably, and is fully refinable. Live angle re-picking is the Phase-2 UXP
+panel's job, so nothing is lost by deferring the multicam container.
+
+**Decisions / details**
+- **Frame-snapping lives only here** (timeline invariant honored): float seconds →
+  `frames*num/den s` using `project.fps`. Integer fps → `1/fps`; NTSC (23.976/29.97/59.94)
+  → 1001-based frameDuration. Clip durations computed as `end_frame − start_frame` so
+  adjacent clips stay **gapless and frame-accurate** after snapping.
+- **Video-only** by design: assets declare `hasVideo` only. The user keeps/places the master
+  audio in Premiere (angles are pre-synced to it) — matches "straight cuts, no A/V re-sync"
+  and keeps the import clean. `include master audio` can be added later if wanted.
+- **Markers**: one per section boundary (labelled by kind, e.g. `intro`, `drop section`,
+  `breakdown`) + one per hard onset-drop (`DROP 0:29.60`). Attached to the asset-clip
+  containing each (frame-snapped) time; source==timeline so marker source-frame == absolute
+  frame. Markers need the optional `energy: EnergyTimeline` arg (a contract type — export
+  still depends only on contracts).
+- Each clip carries its fusion `reason` as a `<note>` (Premiere shows it as clip Notes).
+- FCPXML `version="1.9"` (broadly Premiere-compatible; confirm against PP 2026 on import).
+
+**EDL fallback**: NOT built (per instruction — stub only if FCPXML import fights us). CMX3600
+remains the documented fallback.
+
+**Sample artifact**: `media/voodoo_sample.fcpxml` (git-ignored) from the real "Voodoo" EDL,
+2 placeholder angles (GoPro `D:/footage/voodoo/gopro.mp4`, DSLR `dslr.mov`), fps 30, brief
+"fast cuts on the drop, hold on the hook": **135 clips, 22 markers, 29 KB, well-formed**;
+duration 10046/30s = 334.87 s; drop markers at 888/30s (29.60 s) etc. — frame-exact.
+
+**Premiere import caveats to verify on first real import (PP 2026):**
+- Placeholder media paths will come in **offline** → relink to the real GoPro/DSLR files.
+- Confirm `version="1.9"` is accepted; if not, try a newer FCPXML version.
+- Confirm clip `<note>` and `<marker>` import as expected; markers may land as clip markers
+  rather than sequence markers (FCPXML has no sequence-level marker).
+- If 1.9 / structure is rejected, fall back to EDL (then build `export/edl.py`).
+
+**Gate (PPC-006: "file imports into PP 2026 as a multicam sequence")** — file generated &
+well-formed; **actual Premiere import is the user's validation step (deferred to PPC-007 /
+first real import).**
+
+**SURFACE DECISION (recorded per instruction):** validate the connector via *one* FCPXML
+import, then prioritize the **Phase-2 live UXP panel** as the real workflow. Real acceptance
+set = a **30-min, 2-angle (GoPro + DSLR) DJ set** synced in Premiere by the user.
+
+### Next up
+- `PPC-007`: `cli.py` — run the whole pipeline (analyze → score(fake) → transcribe(fake) →
+  propose_cuts → export) on a project folder → one FCPXML. **Pausing for user sanity-check of
+  the sample FCPXML + import dry-run first.**
+
+---
+
 ## 2026-06-03 · `PPC-005` · fusion (deterministic edit-decision logic)
 
 **Changed**
