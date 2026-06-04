@@ -234,6 +234,64 @@ def test_fix2_tracks_no_overlap_and_union_gapless():
         assert a[1] == b[0], "gap in union of tracks"  # gapless union
 
 
+_OVERLAY_TRACK = (
+    "<track><clipitem id='ov1'><name>logo.png</name><start>10</start><end>30</end>"
+    "<in>0</in><out>20</out><file id='file-png'><name>logo.png</name>"
+    "<pathurl>file://localhost/x/logo.png</pathurl></file></clipitem>"
+    "<enabled>TRUE</enabled><locked>FALSE</locked></track>"
+)
+_FADE = (
+    "<transitionitem><start>0</start><end>0</end><alignment>end-black</alignment>"
+    "<effect><name>Cross Dissolve</name><effectid>Cross Dissolve</effectid>"
+    "<effecttype>transition</effecttype></effect></transitionitem>"
+)
+
+
+def test_overlay_track_passthrough_above_cameras():
+    imp = _imported_2angle()
+    imp.overlay_tracks_xml = [_OVERLAY_TRACK]
+    xml, _ = edit_decision_list_to_fcp7xml_sourced(
+        _edl_2angle(), imp, _angle_tracks(imp), duration_s=8.0
+    )
+    root = ET.fromstring(xml)
+    tracks = root.findall("sequence/media/video/track")
+    assert len(tracks) == 3  # 2 cameras + 1 overlay
+    overlay = tracks[-1]  # appended last => composites on top
+    clip = overlay.find("clipitem")
+    assert clip.findtext("name") == "logo.png"
+    # NOT cut: still one clip at its original position.
+    assert (clip.findtext("start"), clip.findtext("end")) == ("10", "30")
+    assert len(overlay.findall("clipitem")) == 1
+
+
+def test_closing_fade_reapplied_to_last_segment():
+    imp = _imported_2angle()
+    imp.closing_fade_xml = _FADE
+    imp.closing_fade_dur_f = 2  # frames (fps 10)
+    edl = _edl_2angle()  # last decision is GoPro
+    xml, _ = edit_decision_list_to_fcp7xml_sourced(
+        edl, imp, _angle_tracks(imp), duration_s=8.0
+    )
+    root = ET.fromstring(xml)
+    total = int(root.findtext("sequence/duration"))  # 80
+    # GoPro is V2 (second track, alphabetical DSLR<GoPro).
+    gopro_track = root.findall("sequence/media/video/track")[1]
+    fade = gopro_track.find("transitionitem")
+    assert fade is not None
+    assert (fade.findtext("start"), fade.findtext("end")) == (str(total - 2), str(total))
+    assert fade.find("effect/name").text == "Cross Dissolve"
+    assert fade.findtext("alignment") == "end-black"
+
+
+def test_no_fade_when_source_had_none():
+    imp = _imported_2angle()  # closing_fade_xml defaults None
+    xml, _ = edit_decision_list_to_fcp7xml_sourced(
+        _edl_2angle(), imp, _angle_tracks(imp), duration_s=8.0
+    )
+    root = ET.fromstring(xml)
+    assert root.findall("sequence/media/video/track/transitionitem") == []
+
+
 def test_real_switches_preserved():
     imp = _imported_2angle()
     xml, _ = edit_decision_list_to_fcp7xml_sourced(

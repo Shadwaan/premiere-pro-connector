@@ -107,6 +107,12 @@ class ImportedSequence:
     angles: list[AngleTrack]
     audio_files: list[AudioRef]
     audio_xml: str | None = None  # raw <audio> media block, re-emitted verbatim
+    # Overlay / pass-through video tracks (PNG, captions if present, …) — raw <track> XML,
+    # re-emitted verbatim ABOVE the camera tracks. NOT cut. Source stacking order preserved.
+    overlay_tracks_xml: list[str] = field(default_factory=list)
+    # Closing fade captured from the last camera clip (re-applied to the final segment).
+    closing_fade_xml: str | None = None
+    closing_fade_dur_f: int = 0
 
     def duration_s(self) -> float:
         return self.duration_f / self.fps

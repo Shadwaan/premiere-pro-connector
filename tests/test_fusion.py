@@ -304,6 +304,23 @@ def test_availability_forces_only_available_angle():
     assert any(abs(d.t_start - 10.0) < 0.5 for d in edl.decisions)
 
 
+def test_midtimeline_gap_forces_gopro_no_dslr_in_hole():
+    """A DSLR coverage HOLE mid-timeline (camera cut out) must contain no DSLR — only the
+    available angle (GoPro) plays there."""
+    project = make_project(20.0, angle_ids=("GoPro", "DSLR"))
+    bg, energy = make_beatgrid(20.0, bar=2.0), make_energy(20.0)
+    # DSLR is the higher-interest angle, but unavailable in the hole [8, 12] s.
+    scores = make_scores(("GoPro", "DSLR"), 20.0, lambda a, t: 0.9 if a == "DSLR" else 0.4)
+    availability = {"GoPro": [(0.0, 20.0)], "DSLR": [(0.0, 8.0), (12.0, 20.0)]}
+    edl = fuse(project, bg, energy, [], scores, EditParams(switch_penalty=0.0, cut_density=1.0),
+               availability=availability)
+    in_hole = [d for d in edl.decisions if d.t_start < 12.0 - 1e-6 and d.t_end > 8.0 + 1e-6]
+    assert in_hole
+    assert all(d.angle_id == "GoPro" for d in in_hole)  # no DSLR anywhere in the hole
+    # DSLR is used outside the hole (it's the better angle there).
+    assert any(d.angle_id == "DSLR" for d in edl.decisions if d.t_end <= 8.0 + 1e-6)
+
+
 def test_brief_changes_cut_count_end_to_end():
     project = make_project(duration=60.0)
     bg = make_beatgrid(duration=60.0, bar=1.0)

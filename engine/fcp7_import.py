@@ -40,6 +40,20 @@ def _angle_name(file_names: list[str], idx: int) -> str:
     return f"V{idx}"
 
 
+_VIDEO_EXTS = {".mp4", ".mov", ".mxf", ".avi", ".m4v", ".mts", ".mpg", ".mpeg", ".mkv"}
+
+
+def _ext(name: str) -> str:
+    return ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+
+
+def _is_camera_track(file_names: list[str]) -> bool:
+    """A camera-angle track holds only camera VIDEO files (.mp4/.mov/…). Anything else —
+    images (PNG overlays), graphics, captions — is an overlay/pass-through track."""
+    exts = {_ext(n) for n in file_names if n}
+    return bool(exts) and exts.issubset(_VIDEO_EXTS)
+
+
 def parse_fcp7xml(path: str) -> ImportedSequence:
     root = ET.parse(path).getroot()
     seq = root.find("sequence")
@@ -58,21 +72,39 @@ def parse_fcp7xml(path: str) -> ImportedSequence:
         height = int(vfmt.findtext("height") or height)
 
     angles: list[AngleTrack] = []
+    overlay_tracks_xml: list[str] = []
+    closing_fade_xml: str | None = None
+    closing_fade_dur_f = 0
+    _closing_fade_end = -1
     if media is not None and media.find("video") is not None:
         for ti, track in enumerate(media.find("video").findall("track"), start=1):
             clipitems = track.findall("clipitem")
             if not clipitems:
                 continue
+            names = [
+                (c.find("file").findtext("name") if c.find("file") is not None else None)
+                or c.findtext("name")
+                or ""
+                for c in clipitems
+            ]
+            if not _is_camera_track(names):
+                # Overlay / pass-through track (PNG, captions, …): keep verbatim, don't cut.
+                overlay_tracks_xml.append(ET.tostring(track, encoding="unicode"))
+                continue
+
             segments: list[SourceSegment] = []
-            names: list[str] = []
             for clip in clipitems:
                 file_el = clip.find("file")
                 if file_el is None:
                     continue
                 pathurl = file_el.findtext("pathurl")
                 fname = file_el.findtext("name") or clip.findtext("name") or ""
-                names.append(fname)
-                filters = [ET.tostring(f, encoding="unicode") for f in clip.findall("filter")]
+                start = int(clip.findtext("start"))
+                end = int(clip.findtext("end"))
+                src_in = int(clip.findtext("in"))
+                src_out = int(clip.findtext("out"))
+                if end < 0:  # FCP7 uses -1 when a transition defines the boundary
+                    end = start + (src_out - src_in)
                 segments.append(
                     SourceSegment(
                         file_id=file_el.get("id", f"file-v{ti}-{len(segments)}"),
@@ -80,15 +112,24 @@ def parse_fcp7xml(path: str) -> ImportedSequence:
                         pathurl=pathurl or "",
                         file_path=_url_to_path(pathurl),
                         file_xml=ET.tostring(file_el, encoding="unicode"),
-                        tl_start_f=int(clip.findtext("start")),
-                        tl_end_f=int(clip.findtext("end")),
-                        src_in_f=int(clip.findtext("in")),
-                        filters_xml=filters,
+                        tl_start_f=start,
+                        tl_end_f=end,
+                        src_in_f=src_in,
+                        filters_xml=[ET.tostring(f, encoding="unicode") for f in clip.findall("filter")],
                     )
                 )
             if segments:
                 aid = _angle_name(names, ti)
                 angles.append(AngleTrack(angle_id=aid, label=aid, segments=segments))
+
+            # Capture a closing fade-to-black on this camera track (latest end-aligned one).
+            for t in track.findall("transitionitem"):
+                if (t.findtext("alignment") or "").startswith("end"):
+                    e = int(t.findtext("end"))
+                    if e > _closing_fade_end:
+                        _closing_fade_end = e
+                        closing_fade_xml = ET.tostring(t, encoding="unicode")
+                        closing_fade_dur_f = e - int(t.findtext("start"))
 
     audio_files: list[AudioRef] = []
     audio_xml: str | None = None
@@ -124,6 +165,9 @@ def parse_fcp7xml(path: str) -> ImportedSequence:
         angles=angles,
         audio_files=audio_files,
         audio_xml=audio_xml,
+        overlay_tracks_xml=overlay_tracks_xml,
+        closing_fade_xml=closing_fade_xml,
+        closing_fade_dur_f=closing_fade_dur_f,
     )
 
 

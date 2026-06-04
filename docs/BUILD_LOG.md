@@ -8,6 +8,51 @@ still open.
 
 ---
 
+## 2026-06-04 · `PPC-007` (finalize) · overlay pass-through, fade, captions audit
+
+Extended the auto-cut to a finalized timeline (overlays + closing fade) on a colorized/cropped
+source `koshtoLamisaEdit.xml` → `koshtoLamisaEdit_autocut.xml`. No CONTRACTS change.
+
+**AUDIT (Premiere's "FCP Translation Results" report + xmeml):**
+- Report flagged 5 untranslatable items: `Basic 3D` effect on `KOShto.png` (dropped), `Internal
+  Channel Volume Stereo` on the master wav (dropped), and **3 transitions** all downgraded to
+  Cross Dissolve — two `Film Dissolve` on the PNG (V3 @ 2:40/2:45) and one **`Additive Dissolve`
+  on V1 @ 28:37 = the closing fade**.
+- **CAPTIONS WERE DROPPED.** The C1 caption track is **absent from the xmeml entirely** (no
+  `caption` element, no `.srt/.mcc/.scc`) and wasn't even flagged in the report — a hard FCP7-XML
+  format limitation, NOT our bug. Nothing to pass through.
+- Tracks: V1 GoPro (camera), V2 DSLR (camera, **mid-timeline gap [21453, 22673] ≈ 40.7 s**),
+  V3 `KOShto.png` (overlay, ~[4806, 4964], flanked by two Cross-Dissolve fades), A1/A2 master
+  wav. Camera filters: GoPro = Basic Motion + Lumetri; DSLR = + Distort.
+- Fade stored as a `<transitionitem>` (Cross Dissolve, `alignment=end-black`, **30 f = 1.0 s**,
+  51524–51554) — not opacity keyframes. Clips flanked by transitions use `start/end = -1`
+  (recovered as `start + (out−in)`).
+
+**Implemented (importer + exporter only):**
+- **Track classification** (`fcp7_import`): camera track = all clip files are video
+  (.mp4/.mov/…); everything else (PNG, captions) = overlay/pass-through. `end=-1` resolved.
+- **Overlay pass-through**: overlay tracks captured as raw XML and re-emitted **verbatim ABOVE
+  the cameras** (composite on top), not cut.
+- **Closing fade**: captured the end-aligned camera transition and re-applied it to the END of
+  the final on-screen segment (`total−dur … total`), matching type + duration.
+- Camera cut, downbeat snap, coalesce, two-track layout, availability, masterclipid/ppro,
+  filter carry-through — all unchanged.
+
+**Output verification (`koshtoLamisaEdit_autocut.xml`):** 3 video tracks — V1 DSLR (122),
+V2 GoPro (124, +the fade), **V3 PNG overlay on top** (1 clip + its 2 fades, at original
+position, uncut). **0 DSLR clips in the gap [21453, 22673].** Camera union gapless [0, 51554].
+Filters: 122 DSLR clips `[Basic Motion, Distort, Lumetri]`, 124 GoPro `[Basic Motion, Lumetri]`.
+0 missing masterclipid/ppro. **Closing fade present on GoPro: Cross Dissolve, end-black,
+51524–51554 (1.0 s)** — reproduced exactly. Audio re-emitted; captions absent (dropped at source).
+
+**Tests:** overlay pass-through, closing-fade-reapplied, no-fade-when-none (sourced), and
+mid-timeline-gap-forces-GoPro (fusion). **105 offline tests pass.**
+
+### Next up
+- `PPC-008`: golden-clip eval (cut-on-beat accuracy + keep-rate) — last Phase-0 task.
+
+---
+
 ## 2026-06-04 · `PPC-007` (fusion fix) · switches land on downbeats, not late beats
 
 **Symptom.** Angle switches felt 1–2 beats late — landing on beat 2/3 of the bar instead of

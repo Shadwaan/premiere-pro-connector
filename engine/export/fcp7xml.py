@@ -211,6 +211,8 @@ def edit_decision_list_to_fcp7xml_sourced(
     - Each clip is split at source-file boundaries (multi-file angles stay synced), keeps its
       source in-point, and re-emits ALL ``<filter>`` blocks verbatim (Lumetri grade, Basic
       Motion reframe, DSLR Distort, …). The master audio block is re-emitted verbatim.
+    - Overlay tracks (PNG, captions if present) are copied verbatim ABOVE the cameras; a
+      captured closing fade-to-black is re-applied to the end of the final segment.
 
     Returns ``(xml, n_unresolved)`` — ``n_unresolved`` is the count of runs with no footage
     (should be 0 when availability is honored).
@@ -255,11 +257,13 @@ def edit_decision_list_to_fcp7xml_sourced(
     # FIX 2 — one <video><track> per angle, deterministic order by angle_id (alphabetical;
     # for this set DSLR=V1, GoPro=V2). Only one angle is active at any instant, so the tracks
     # never overlap in time and their union gaplessly covers [0, total_frames].
+    angle_track_el: dict[str, ET.Element] = {}
     for aid in sorted(runs_by_angle):
         at = angle_tracks.get(aid)
         if at is None:
             raise ValueError(f"decision angle_id {aid!r} has no parsed track")
         atrack = ET.SubElement(video, "track")
+        angle_track_el[aid] = atrack
         for t0, t1 in runs_by_angle[aid]:
             resolved = at.resolve(frames_at(t0, fps), frames_at(t1, fps))
             if not resolved:
@@ -270,6 +274,24 @@ def edit_decision_list_to_fcp7xml_sourced(
                 _emit_clipitem(atrack, clip_n, rc, fps, timebase, ntsc, emitted_files)
         ET.SubElement(atrack, "enabled").text = "TRUE"
         ET.SubElement(atrack, "locked").text = "FALSE"
+
+    # FADE: re-apply the captured closing fade-to-black to the END of the final on-screen
+    # segment (the last decision's angle), matching the source fade's type + duration.
+    if imported.closing_fade_xml and edl.decisions:
+        target = angle_track_el.get(edl.decisions[-1].angle_id)
+        if target is not None:
+            fade = ET.fromstring(imported.closing_fade_xml)
+            dur = imported.closing_fade_dur_f or 1
+            fade.find("start").text = str(total_frames - dur)
+            fade.find("end").text = str(total_frames)
+            enabled_el = target.find("enabled")
+            idx = list(target).index(enabled_el) if enabled_el is not None else len(target)
+            target.insert(idx, fade)  # transitionitem goes before <enabled>/<locked>
+
+    # OVERLAY pass-through: copy overlay tracks (PNG, captions if any) VERBATIM, ABOVE the
+    # camera tracks so they composite on top; relative stacking preserved. NOT cut.
+    for overlay_xml in imported.overlay_tracks_xml:
+        video.append(ET.fromstring(overlay_xml))
 
     # Master audio: re-emit verbatim so the cut video stays synced to the music.
     if imported.audio_xml:
