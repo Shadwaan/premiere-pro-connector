@@ -27,5 +27,10 @@ Thumbs.db
 *.mov
 *.mp4
 *.fcpxml
+# Editor interchange exports (FCP7 XML / FCPXML auto-cut outputs) and image overlays
+*.xml
+*.png
+*.jpg
+*.jpeg
 /scratch/
 /media/
