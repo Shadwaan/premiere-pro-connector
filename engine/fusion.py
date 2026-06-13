@@ -130,6 +130,7 @@ def _target_shot_len(
     e_vals: np.ndarray,
     drops: list[float],
     params: EditParams,
+    hold_max_s: float = HOLD_MAX_S,
 ) -> float:
     e = float(np.interp(t, e_times, e_vals)) if e_times.size else 0.5
     intensity = 0.4 * params.cut_density + 0.6 * e
@@ -140,7 +141,7 @@ def _target_shot_len(
         intensity += _HARD_DROP_BOOST * params.drop_aggression
     intensity = float(np.clip(intensity, 0.0, 1.0))
     hold_min = max(params.min_shot_len_s, HOLD_MIN_FLOOR_S)
-    hold_max = max(HOLD_MAX_S, hold_min)
+    hold_max = max(hold_max_s, hold_min)
     return hold_max - intensity * (hold_max - hold_min)
 
 
@@ -151,6 +152,7 @@ def _candidate_cuts(
     params: EditParams,
     phrase_downbeats: int,
     switch_quant: str,
+    hold_max_s: float,
     availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> list[float]:
     duration = float(project.duration_s)
@@ -178,7 +180,7 @@ def _candidate_cuts(
     cuts = [0.0]
     last = 0.0
     while last < duration - _EPS:
-        L = _target_shot_len(last, energy.sections, e_times, e_vals, energy.drops, params)
+        L = _target_shot_len(last, energy.sections, e_times, e_vals, energy.drops, params, hold_max_s)
         ng = _nearest_grid(grid, last + L, last + params.min_shot_len_s, last)
         nf = _first_ge(forced_arr, last + _EPS) if forced_arr.size else float("inf")
         nxt = min(ng, nf, duration)
@@ -351,6 +353,7 @@ def fuse(
     *,
     phrase_downbeats: int = 2,
     switch_quant: str = "downbeat",
+    hold_max_s: float | None = None,
     availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> EditDecisionList:
     """Core fusion: signals + params -> validated ``EditDecisionList``.
@@ -358,12 +361,14 @@ def fuse(
     ``switch_quant`` is the grid that cuts/angle-switches quantize to: ``"downbeat"``
     (default — switches land on the bar's "1"), ``"beat"`` (finer), or ``"phrase"`` (every
     ``phrase_downbeats`` downbeats, e.g. 2 = every 2 bars / 8 beats). Snapping is to the
-    NEAREST grid point, not forward. ``availability`` (optional) maps angle_id -> available
-    [start, end] intervals; an angle is only chosen where it has footage, and availability
-    edges become forced cut points.
+    NEAREST grid point, not forward. ``hold_max_s`` is the longest hold (max shot length);
+    ``None`` keeps the engine default (``HOLD_MAX_S``). ``availability`` (optional) maps
+    angle_id -> available [start, end] intervals; an angle is only chosen where it has
+    footage, and availability edges become forced cut points.
     """
     cuts = _candidate_cuts(
-        project, beat_grid, energy, params, phrase_downbeats, switch_quant, availability
+        project, beat_grid, energy, params, phrase_downbeats, switch_quant,
+        HOLD_MAX_S if hold_max_s is None else hold_max_s, availability,
     )
     decisions = _assign_angles(
         cuts, project, words, angle_scores, energy.sections, params, availability
@@ -384,18 +389,21 @@ def propose_cuts(
     brief: str | None = None,
     phrase_downbeats: int = 2,
     switch_quant: str | None = None,
+    hold_max_s: float | None = None,
     availability: dict[str, list[tuple[float, float]]] | None = None,
 ) -> EditDecisionList:
     """Fusion entrypoint accepting either explicit ``params`` or a natural-language ``brief``.
 
     ``switch_quant`` defaults to the resolved ``params.snap`` (which the brief sets, baseline
     ``"downbeat"``), so switches land on the bar by default; pass it explicitly to override.
+    ``hold_max_s`` (max shot length) defaults to the engine constant when ``None``.
     """
     p = params if params is not None else map_brief_to_params(brief)
     sq = switch_quant if switch_quant is not None else p.snap
     return fuse(
         project, beat_grid, energy, words, angle_scores, p,
-        phrase_downbeats=phrase_downbeats, switch_quant=sq, availability=availability,
+        phrase_downbeats=phrase_downbeats, switch_quant=sq, hold_max_s=hold_max_s,
+        availability=availability,
     )
 
 

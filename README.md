@@ -114,6 +114,23 @@ deterministic **fake** angle-scoring/transcription — no network), and writes a
 importable FCP7 XML: camera cuts on two tracks, overlays passed through on top, grade/crop/
 distort and the closing fade preserved. Import it back into Premiere via `File ▸ Import`.
 
+## Local Web UI
+
+A browser surface over the same engine for **non-developers** — no Claude Code, no paid plan,
+no LLM. Upload the FCP7 XML, set the knobs (snap mode, min/max shot length, phrase length,
+optional brief, seed), get the auto-cut XML back to import into Premiere.
+
+```bash
+pip install -r requirements-web.txt
+uvicorn web.app:app            # then open http://localhost:8000
+```
+
+It calls the exact same `engine.pipeline.run_autocut` the CLI uses, so the output is identical.
+**Run it on the machine that holds the media/audio** — the engine reads the master audio and
+resolves media paths from the local filesystem referenced in the XML (your footage is never
+uploaded; the output XML keeps the original paths). If the master-audio path in the XML doesn't
+resolve on this machine, the page lets you pick the master audio file directly.
+
 ## Docs
 
 - [`PRD.md`](PRD.md) — what we're building and why, with acceptance criteria.

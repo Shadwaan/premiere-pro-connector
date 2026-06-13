@@ -1,0 +1,11 @@
+# Local web UI surface (PRD §4 req 9 / §9 Q6). Kept SEPARATE from the core engine deps
+# (requirements.txt) so the engine stays lean. Install only if you want the browser UI:
+#   pip install -r requirements-web.txt
+#
+# Runs entirely on localhost — no outbound network, no LLM. Must run on the machine that
+# holds the media/audio referenced by the XML.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20      # required for multipart/form-data uploads
+httpx==0.28.1                 # required by fastapi.testclient (web smoke test)

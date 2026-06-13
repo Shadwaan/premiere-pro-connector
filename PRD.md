@@ -71,6 +71,15 @@ In priority order, the product must:
 7. **Be driven from Claude** via an MCP connector: the user prompts, Claude calls tools, the
    sequence is produced.
 8. **(Phase 2) Apply edits to an open Premiere project live** via a UXP panel.
+9. **(Phase 1.5) Offer a standalone local web UI surface** so a non-developer can run the
+   editor with **no Claude Code/Cowork and no paid plan**: upload an FCP7 XML, set edit
+   parameters via form controls (snap mode, shot-length bounds, camera priority, brief
+   keywords) — **no LLM required** — run the engine locally, and download the result XML to
+   import into Premiere. The web app is a **thin layer over the same reusable engine** (not a
+   reimplementation) and must run **locally**, because the engine reads the master audio and
+   resolves media paths from the local filesystem referenced in the XML. Conversational/NL
+   control and any hosted/multi-tenant deployment are out of scope for this surface in v1
+   (see §7 non-goals and §9 Q6).
 
 ---
 
@@ -143,3 +152,12 @@ emitted decision list. A human editor would keep most cuts and only nudge a mino
    angle-availability windows are all preserved on export (see ARCHITECTURE §3.1). First real
    set (`koshtoset.xml`) round-trips; **import into PP 2026 is the open validation step.**
 5. **Min/target angle count** for v1 (2 vs 3+).
+6. **Web UI surface — packaging & control (Phase 1.5).** (a) *Packaging:* ship as a
+   "run-it-yourself" localhost app (`uvicorn`, user runs one command) first, or invest in a
+   packaged double-click desktop bundle (PyInstaller/Tauri that launches the local server and
+   opens the browser)? (Leaning: run-it-yourself first to validate, package later.)
+   (b) *Media/audio resolution:* the engine needs the master audio + media paths from the XML
+   to resolve on the local filesystem — fall back to a "select your master audio" upload when
+   a path doesn't resolve? (c) *Conversational control:* keep the web UI parameter-only (no
+   LLM) for v1; defer "talk to the editor" to a later surface that's either bring-your-own-API-
+   key or a hosted SaaS with billing (the latter is a separate product — see §7 non-goals).
